@@ -25,7 +25,6 @@ class _PostPageState extends State<PostPage> {
     '本気モード',
     '初心者モード',
     '学生組',
-    'フレンド機能',
     '勉強モード',
   ];
 
@@ -160,6 +159,7 @@ class _PostPageState extends State<PostPage> {
           'title': _titleController.text.trim(),
           'description': _descriptionController.text.trim(),
           'memberCount': _selectedMemberCount ?? 1,
+          'currentMembers': 1,
           'role': _selectedRole,
           'level': _selectedLevel,
           'languages': _selectedLanguages,
@@ -192,8 +192,11 @@ class _PostPageState extends State<PostPage> {
   }
 
   Widget _buildIntroPanel() {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final panelWidth = screenWidth >= 1100 ? 400.0 : double.infinity;
+
     return Container(
-      width: 400,
+      width: panelWidth,
       padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(28),
@@ -677,76 +680,80 @@ class _PostPageState extends State<PostPage> {
           child: Container(
             color: Colors.black.withValues(alpha: 0.55),
             child: Center(
-              child: Container(
-                width: 320,
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(24),
-                  gradient: const LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                    colors: [Color(0xFF141C35), Color(0xFF0B1022)],
-                  ),
-                  border: Border.all(
-                    color: const Color(0xFF34D399).withValues(alpha: 0.45),
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xFF34D399).withValues(alpha: 0.18),
-                      blurRadius: 24,
-                      spreadRadius: 2,
-                    ),
-                  ],
-                ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 64,
-                      height: 64,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        gradient: const LinearGradient(
-                          colors: [Color(0xFF34D399), Color(0xFF22D3EE)],
+              child: Builder(
+                builder: (context) {
+                  final screenWidth = MediaQuery.of(context).size.width;
+                  final dialogWidth = screenWidth * 0.9 > 420 ? 420.0 : screenWidth * 0.9;
+                  return Container(
+                    width: dialogWidth,
+                    padding: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(24),
+                      gradient: const LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [Color(0xFF141C35), Color(0xFF0B1022)],
+                      ),
+                      border: Border.all(
+                        color: const Color(0xFF34D399).withValues(alpha: 0.45),
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF34D399).withValues(alpha: 0.18),
+                          blurRadius: 24,
+                          spreadRadius: 2,
                         ),
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(
-                              0xFF34D399,
-                            ).withValues(alpha: 0.25),
-                            blurRadius: 20,
-                            spreadRadius: 2,
+                      ],
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 64,
+                          height: 64,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            gradient: const LinearGradient(
+                              colors: [Color(0xFF34D399), Color(0xFF22D3EE)],
+                            ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFF34D399).withValues(alpha: 0.25),
+                                blurRadius: 20,
+                                spreadRadius: 2,
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                      child: Icon(
-                        Icons.check_rounded,
-                        color: Colors.white,
-                        size: 34,
-                      ),
+                          child: const Icon(
+                            Icons.check_rounded,
+                            color: Colors.white,
+                            size: 34,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          '完了',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 22,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: -0.6,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'ホーム画面へ戻ります。',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.72),
+                            fontSize: 13,
+                            height: 1.45,
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 16),
-                    const Text(
-                      '完了',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 22,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: -0.6,
-                      ),
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'ホーム画面へ戻ります。',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.72),
-                        fontSize: 13,
-                        height: 1.45,
-                      ),
-                    ),
-                  ],
-                ),
+                  );
+                },
               ),
             ),
           ),

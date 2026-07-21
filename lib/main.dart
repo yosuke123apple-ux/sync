@@ -1,10 +1,201 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'firebase_options.dart';
 import 'post_page.dart';
 import 'task_page.dart';
+// streak feature removed per request
+import 'package:firebase_auth/firebase_auth.dart';
+import 'dart:async'; // ★これを追加します！
+//githubログイン実装コードここから
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import 'github_api.dart';
+import 'dart:ui';
+class LoginPage extends StatefulWidget {
+  const LoginPage({super.key});
 
+  @override
+  State<LoginPage> createState() => _LoginPageState();
+}
+
+class _LoginPageState extends State<LoginPage> {
+  bool _isSigningIn = false;
+  StreamSubscription<User?>? _authSub;
+
+  Future<void> _login(BuildContext context) async {
+    if (_isSigningIn) return;
+
+    setState(() {
+      _isSigningIn = true;
+    });
+
+    try {//ウェブアプリかスマホアプリかで自動で切り替えているコード
+      if (kIsWeb) {
+        await FirebaseAuth.instance.signInWithPopup(GithubAuthProvider());
+      } else {
+        await FirebaseAuth.instance.signInWithProvider(GithubAuthProvider());
+      }
+if (kIsWeb) {
+  await FirebaseAuth.instance.signInWithPopup(GithubAuthProvider());
+} else {
+  await FirebaseAuth.instance.signInWithProvider(GithubAuthProvider());
+}
+
+// ここに追加
+final user = FirebaseAuth.instance.currentUser;
+
+debugPrint('GitHub UID: ${user?.uid}');
+debugPrint('GitHub email: ${user?.email}');
+debugPrint('GitHub name: ${user?.displayName}');
+
+if (!context.mounted) return;
+
+Navigator.of(context).pushReplacement(
+  MaterialPageRoute(
+    builder: (_) => const HomePage(),
+  ),
+);
+      if (!context.mounted) return;
+
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(//画面切り替えアニメーション
+          builder: (_) => const HomePage(),
+        ),
+      );
+    } on FirebaseAuthException catch (e) {
+      if (!context.mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.message ?? 'GitHubログインに失敗しました。もう一度お試しください。'),
+        ),
+      );
+    } catch (e) {
+      if (!context.mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('ログイン処理中にエラーが発生しました。しばらくしてから再度お試しください。'),
+        ),
+      );
+    } finally {//ミスを元通り
+      if (mounted) {
+        setState(() {
+          _isSigningIn = false;
+        });
+      }
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    // サインインが外部フロー（redirect など）で復帰する場合に備え、
+    // authStateChanges を監視してログイン復帰時に自動でホームへ遷移する。
+    _authSub = FirebaseAuth.instance.authStateChanges().listen((user) {
+      if (user != null && mounted) {
+        // 重複ナビゲーションを避ける: 現在のルートが LoginPage のままなら遷移する
+        final isCurrent = ModalRoute.of(context)?.isCurrent ?? true;
+        if (isCurrent) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const HomePage()),
+          );
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final buttonSize = screenWidth >= 600 ? 96.0 : 72.0;
+
+    return Scaffold(
+      backgroundColor: const Color(0xFF060A18),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'GitHubでログイン',
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                  letterSpacing: 0.3,
+                ),
+              ),
+              const SizedBox(height: 18),
+              Text(
+                '続けるには GitHub アカウントでログインしてください',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.white.withValues(alpha: 0.7),
+                  height: 1.5,
+                ),
+              ),
+              const SizedBox(height: 28),
+              Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(22),
+                  onTap: _isSigningIn ? null : () => _login(context),
+                  child: Container(
+                    width: buttonSize,
+                    height: buttonSize,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF24292F).withValues(alpha: 0.98),
+                      borderRadius: BorderRadius.circular(22),
+                      border: Border.all(
+                        color: const Color(0xFF6E7781).withValues(alpha: 0.35),
+                        width: 1.2,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFF24292F).withValues(alpha: 0.28),
+                          blurRadius: 18,
+                          spreadRadius: 1,
+                          offset: const Offset(0, 10),
+                        ),
+                      ],
+                    ),
+                    child: Center(//ロード中のくるくるアイコン
+                      child: _isSigningIn
+                          ? const SizedBox(
+                              width: 24,
+                              height: 24,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2.2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : const Icon(
+                              Icons.login_rounded,
+                              size: 34,
+                              color: Colors.white,
+                            ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
 // ============================================================
 // エントリーポイント
 // ============================================================
@@ -15,12 +206,48 @@ Future<void> main() async {// Flutterの初期化とFirebaseの初期化を行�
   runApp(const SyncApp());
 }
 
-/// Firebase / Firestoreの初期化（オフラインキャッシュを有効化）
+/// Firebase / Firestoreの初期化（オフラインキャッシュを有効化）//先に保存されてるからオフラインでもそのデータが出る
 Future<void> _initializeFirebase() async {
   try {
     await Firebase.initializeApp(// Firebaseの初期化
       options: DefaultFirebaseOptions.currentPlatform,
     );
+    
+    // ✅ ログイン状態をアプリ再起動後も保持するように設定
+    if (kIsWeb) {
+      await FirebaseAuth.instance.setPersistence(Persistence.LOCAL);
+      debugPrint('✅ ウェブ: セッション永続化を有効化');
+    } else {
+      // スマホアプリの場合、デフォルトでセッション保持されるが、確認用ログ出力
+      debugPrint('✅ スマホアプリ: デフォルトでセッション保持（キーチェーン/SharedPreferences）');
+    }
+    
+    // ✅ 保存されたセッション復帰を最大10秒待機（ネットワーク遅延に対応）
+    debugPrint('⏳ 保存されたセッション復帰を確認中...');
+
+    // ログ: authStateChanges の各 emit を出力（デバッグ用）
+    FirebaseAuth.instance.authStateChanges().listen((u) {
+      debugPrint("🔔 authStateChanges emit: ${u?.uid ?? 'null'} (${u?.email ?? 'null'})");
+    });
+
+    try {
+      // authStateChanges() が最初の emit を返すまで最大10秒待機（ネットワーク遅延対策）
+      final firstAuthState = await FirebaseAuth.instance.authStateChanges()
+          .first
+          .timeout(const Duration(seconds: 10));
+
+      if (firstAuthState != null) {
+        debugPrint('✅ 前回のセッション復帰成功: ${firstAuthState.email}');
+        debugPrint('   UID: ${firstAuthState.uid}');
+      } else {
+        debugPrint('ℹ️  ログイン状態なし（新規ユーザー）');
+      }
+    } on TimeoutException {
+      // タイムアウト → セッション復帰中の可能性
+      debugPrint('⚠️  セッション復帰タイムアウト（ネットワーク遅延の可能性）');
+      debugPrint('   AuthGate がセッション復帰を待機します');
+    }
+    
 // Firestoreのオフラインキャッシュを有効化
     final firestore = FirebaseFirestore.instance;
     await firestore.enableNetwork();
@@ -45,8 +272,67 @@ class SyncApp extends StatelessWidget {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'SyncCrew',
-      theme: ThemeData.dark(),// ダークテーマを使用
-      home: const HomePage(),
+      theme: ThemeData.dark(),
+      scrollBehavior: const MaterialScrollBehavior().copyWith(
+      dragDevices: {
+        PointerDeviceKind.touch,
+        PointerDeviceKind.mouse, // マウスでの横スクロール（ドラッグ）を有効化
+        PointerDeviceKind.trackpad, // トラックパッドでの操作も有効化
+      },
+    ),
+      home: const AuthGate(),
+    );
+  }
+}
+
+class AuthGate extends StatelessWidget {
+  const AuthGate({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<User?>(
+      stream: FirebaseAuth.instance.authStateChanges(),
+      builder: (context, snapshot) {
+        // ✅ ログイン状態の遷移をトラッキング
+        if (snapshot.hasError) {
+          debugPrint('❌ 認証エラー: ${snapshot.error}');
+          return Scaffold(
+            body: Center(
+              child: Text('認証エラー: ${snapshot.error}'),
+            ),
+          );
+        }
+        
+        // ✅ 最初の emit を待機（セッション復帰の確認完了を待つ）
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          debugPrint('⏳ セッション確認中...');
+          return const Scaffold(
+            body: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text(
+                    'セッション復帰中...',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }
+
+        final user = snapshot.data;
+        if (user == null) {
+          debugPrint('🔓 ログイン画面を表示（セッション無効）');
+          return const LoginPage();
+        }
+
+        debugPrint('✅ ログイン成功: ${user.email}');
+        debugPrint('   UID: ${user.uid}');
+        return const HomePage();
+      },
     );
   }
 }
@@ -83,6 +369,22 @@ class AppColors {
     Color(0xfff472b6),
     Color(0xff60a5fa),
   ];
+
+  /// モード別の募集カードアクセントカラー
+  static Color accentForRole(String role) {
+    switch (role) {
+      case '本気モード':
+        return const Color(0xffEF4444);
+      case '初心者モード':
+        return const Color(0xffF59E0B);
+      case '学生組':
+        return const Color(0xff10B981);
+      case '勉強モード':
+        return const Color(0xff3B82F6);
+      default:
+        return const Color(0xff8B5CF6);
+    }
+  }
 }
 
 // ============================================================
@@ -95,42 +397,57 @@ class AppColors {
 /// ほぼ同じUIを2箇所に丸ごとコピペしていた（最大のDRY違反）。
 /// この1つのモデルに統一することで、カードUIは1種類だけで済むようにした。
 class ProjectInfo {
+  final String id;
   final String title;
   final String description;
   final String ownerInfo;
+  final String ownerId; // ←追加
+  final String role;
   final int currentMembers;
-  final int? maxMembers; // Firestoreの投稿には定員の概念がないためnull許容
+  final int? maxMembers;
   final List<String> tags;
 
   const ProjectInfo({
+    required this.id,
     required this.title,
     required this.description,
     required this.ownerInfo,
+    required this.ownerId,
+    required this.role,
     required this.currentMembers,
     required this.tags,
     this.maxMembers,
   });
 
   /// Firestoreのドキュメントデータから生成する
-  factory ProjectInfo.fromFirestore(Map<String, dynamic> data) {
+  factory ProjectInfo.fromFirestore(String id, Map<String, dynamic> data) {
     final role = data['role'] as String? ?? '役割未設定';
     final level = data['level'] as String? ?? 'レベル未設定';
     final languages =
         (data['languages'] as List?)?.whereType<String>().toList() ??
         const <String>[];
+    final maxMembers = data['memberCount'] as int?;
 
-    return ProjectInfo(
-      title: _textOrFallback(data['title'] as String?, '無題の募集'),
-      description: _textOrFallback(data['description'] as String?, '説明がありません'),
-      ownerInfo: _textOrFallback(data['ownerInfo'] as String?, '投稿者情報なし'),
-      currentMembers: data['memberCount'] as int? ?? 1,
-      tags: [role, level, ...languages.take(3)],
-    );
+return ProjectInfo(
+  id: id,
+  title: _textOrFallback(data['title'] as String?, '無題の募集'),
+  description: _textOrFallback(data['description'] as String?, '説明がありません'),
+  ownerInfo: _textOrFallback(data['ownerInfo'] as String?, '投稿者情報なし'),
+  ownerId: data['ownerId'] as String? ?? '',
+  role: role,
+  currentMembers: data['currentMembers'] as int? ?? 1,
+  maxMembers: maxMembers,
+  tags: [role, level, ...languages.take(3)],
+);
   }
 
-  /// 人数表示用ラベル（例: 定員ありなら"2/3人"、なしなら"2人"）
-  String get memberLabel =>
-      maxMembers != null ? '$currentMembers/$maxMembers人' : '$currentMembers人';
+  /// 人数表示用ラベル（例: 定員ありなら"1/3"、なしなら"1/募集中"）
+  String get memberLabel {
+    if (maxMembers != null) {
+      return '$currentMembers/$maxMembers';
+    }
+    return '$currentMembers/募集中';
+  }
 }
 /// 文字列がnullまたは空文字ならフォールバック値を返す
 String _textOrFallback(String? value, String fallback) {
@@ -211,8 +528,7 @@ const List<MenuItemInfo> _menuItems = [
 /// List.generate で「同じ内容を6件表示する」という意図を1箇所にまとめた。
 
 
-/// 現在ログイン中のユーザー（自分の募集への参加をブロックする判定に使用）
-const String _currentUserOwnerInfo = 'やまた_Dev';
+
 
 // ============================================================
 // サービス層（Firestore通信）
@@ -226,12 +542,12 @@ class ProjectService {/// Firestoreのprojectsコレクションを監視し、�
   static Stream<List<ProjectInfo>> watchProjects() {
     return FirebaseFirestore.instance
         .collection('projects')
-        .orderBy('createdAt', descending: true)
-        .limit(200)
-        .snapshots()
-        .map(
-          (snapshot) => snapshot.docs
-              .map((doc) => ProjectInfo.fromFirestore(doc.data()))
+        .orderBy('createdAt', descending: true)//作成日時順で並び返されている
+        .limit(200)//取得する最大件数
+        .snapshots()//データが変わるたびにまた監視する
+          .map(//流れてきたデータを別の形に変換する//toList ProjectInfoを1つのリストにまとめなおすための命令
+        (snapshot) => snapshot.docs//projectInfo.fromFirestoreでアプリ用のきれいなデータに変換する
+          .map((doc) => ProjectInfo.fromFirestore(doc.id, doc.data()))
               .toList(),
         );
   }
@@ -245,25 +561,23 @@ class ProjectService {/// Firestoreのprojectsコレクションを監視し、�
 ///
 /// ダイアログ表示や画面遷移はUIの一部だが、状態を持たない単純な処理なので
 /// StatefulWidgetのメソッドとしてHomePageに埋め込まず、関数として切り出した。
-
+//Futureフューチャーでまだ返さないけど終わったら返すよって未来に返すことが約束されてるからフューチャー
 Future<void> _handleJoinPressed(
   BuildContext context, {
-  required String currentUserOwnerInfo,
   required ProjectInfo project,
 }) async {
   await _confirmJoinAndOpenTask(
     context,
     project: project,
-    currentUserOwnerInfo: currentUserOwnerInfo,
   );
 }
-
 Future<void> _confirmJoinAndOpenTask(
   BuildContext context, {
   required ProjectInfo project,
-  required String currentUserOwnerInfo,
 }) async {
-  final isOwnProject = project.ownerInfo.trim() == currentUserOwnerInfo.trim();
+  final user = FirebaseAuth.instance.currentUser;
+
+final isOwnProject = project.ownerId == user?.uid;
   final dialogTitle = isOwnProject ? '自分の募集です' : 'このチームに参加しますか';
   final dialogContent = isOwnProject
       ? '自分が投稿した募集でも、そのままタスクページへ進めます。'
@@ -293,6 +607,35 @@ Future<void> _confirmJoinAndOpenTask(
 
   if (shouldJoin != true || !context.mounted) return;
 
+  if (!isOwnProject) {
+    if (project.maxMembers != null && project.currentMembers >= project.maxMembers!) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('この募集はすでに上限に達しています')),
+      );
+      return;
+    }
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('projects')
+          .doc(project.id)
+          .update({
+            'currentMembers': FieldValue.increment(1),
+          });
+    } catch (e, stackTrace) {
+      debugPrint('❌ 参加人数更新エラー: $e');
+      debugPrint('$stackTrace');
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('参加処理に失敗しました。もう一度お試しください。')),
+      );
+      return;
+    }
+  }
+
+  if (!context.mounted) return;
+
   await Navigator.push(
     context,
     MaterialPageRoute(
@@ -300,6 +643,7 @@ Future<void> _confirmJoinAndOpenTask(
         projectTitle: project.title,
         ownerInfo: project.ownerInfo,
         isOwnProject: isOwnProject,
+        projectId: project.id,
       ),
     ),
   );
@@ -308,44 +652,6 @@ Future<void> _confirmJoinAndOpenTask(
 // ============================================================
 // ウィジェット：小さな部品
 // ============================================================
-
-/// 数値＋ラベルの統計表示（例: "7日" / "連続記録"）
-class _StatItem extends StatelessWidget {
-  final String title;
-  final String value;
-  final Color? valueColor;
-
-  const _StatItem({required this.title, required this.value, this.valueColor});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.center,
-      children: [
-        Text(
-          value,
-          style: TextStyle(
-            color: valueColor ?? const Color(0xFF7C5CFF),
-            fontSize: 32,
-            fontWeight: FontWeight.w900,
-            letterSpacing: -1,
-            height: 1,
-          ),
-        ),
-        const SizedBox(height: 6),
-        Text(
-          title,
-          style: const TextStyle(
-            color: Color(0xFF7B849D),
-            fontSize: 12,
-            fontWeight: FontWeight.w600,
-            letterSpacing: 0.5,
-          ),
-        ),
-      ],
-    );
-  }
-}
 
 /// 右サイドバーで繰り返し使われるカード型コンテナ
 ///
@@ -651,9 +957,7 @@ class _ProjectCard extends StatelessWidget {
 
 /// 募集一覧（Firestoreから取得。エラー/未取得時はモックデータにフォールバック）
 class _ProjectList extends StatelessWidget {
-  final String currentUserOwnerInfo;
-
-  const _ProjectList({required this.currentUserOwnerInfo});
+  const _ProjectList();
 
   @override
   Widget build(BuildContext context) {
@@ -694,15 +998,12 @@ class _ProjectList extends StatelessWidget {
       itemCount: projects.length,
       itemBuilder: (context, index) {
         final project = projects[index];
-        final accent =
-            AppColors.projectAccentPalette[index %
-                AppColors.projectAccentPalette.length];
+        final accent = AppColors.accentForRole(project.role);
         return _ProjectCard(
           project: project,
           accent: accent,
           onJoinPressed: () => _handleJoinPressed(
             context,
-            currentUserOwnerInfo: currentUserOwnerInfo,
             project: project,
           ),
         );
@@ -844,7 +1145,7 @@ class _HomeSidebarLeft extends StatelessWidget {
                 ),
               ),
             ),
-            _buildProfileCard(),
+            _buildProfileCard(context),
             _buildSettingsRow(),
           ],
         ),
@@ -896,7 +1197,7 @@ class _HomeSidebarLeft extends StatelessWidget {
     );
   }
 
-  Widget _buildProfileCard() {
+  Widget _buildProfileCard(BuildContext context) {
     return Container(
       width: 220,
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
@@ -995,12 +1296,7 @@ class _HomeSidebarLeft extends StatelessWidget {
           const SizedBox(height: 12),
           const Divider(color: Colors.white12, height: 1),
           const SizedBox(height: 12),
-          const Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _StatItem(title: '連続記録', value: '7日', valueColor: Colors.white),
-            ],
-          ),
+          const SizedBox.shrink(),
         ],
       ),
     );
@@ -1481,8 +1777,37 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   int _selectedMenuIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+ 
+    WidgetsBinding.instance.addObserver(this);
+    // 起動時にも記録を試みる
+    _recordTodayIfNeeded();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      // フォアグラウンド復帰時に記録を試みる
+      _recordTodayIfNeeded();
+    }
+  }
+
+  Future<void> _recordTodayIfNeeded() async {
+    // Streak feature removed — no-op to avoid runtime errors.
+    return;
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1513,9 +1838,7 @@ class _HomePageState extends State<HomePage> {
                   Expanded(
                     child: ConstrainedBox(
                       constraints: BoxConstraints(maxWidth: 1250),
-                      child: const _ProjectList(
-                        currentUserOwnerInfo: _currentUserOwnerInfo,
-                      ),
+                      child: const _ProjectList(),
                     ),
                   ),
                 ],
