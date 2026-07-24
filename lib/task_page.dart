@@ -1,11 +1,12 @@
 import 'dart:async';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'github_api.dart';
-
+import 'github_session.dart';
 // ============================================================
 // カラーパレット
 // ============================================================
@@ -164,26 +165,29 @@ Color _getLanguageColor(String language) {
       return const Color(0xFF8B949E);
   }
 }
-// ============================================================
-// メンバーデータ（ダミー・実データとは連携していない）
-// ============================================================
-class _MemberData {
-  final String name;
+class _ProjectMember {
+  final String uid;
+  final String githubLogin;
+  final String githubName;
   final String role;
   final Color roleColor;
   final Color avatarColor;
   final String status;
   final bool isOnline;
-  final bool isSelf; // 自分自身のカードかどうか
+  final bool isSelf;
+  final bool isOwner;
 
-  const _MemberData({
-    required this.name,
+  const _ProjectMember({
+    required this.uid,
+    required this.githubLogin,
+    required this.githubName,
     required this.role,
     required this.roleColor,
     required this.avatarColor,
     required this.status,
-    this.isOnline = false,
-    this.isSelf = false,
+    required this.isOnline,
+    required this.isSelf,
+    required this.isOwner,
   });
 }
 
@@ -413,55 +417,36 @@ class _TaskPageBody extends StatefulWidget {
 }
 
 class _TaskPageBodyState extends State<_TaskPageBody> {
-    Map<String, dynamic>? repo;
-    Map<String, dynamic>? languages;
-    List<dynamic> pullRequests = [];
-List<dynamic> issues = [];
-int get openPulls =>
-    pullRequests.where((pr) => pr['state'] == 'open').length;
+  Map<String, dynamic>? repo;
+  Map<String, dynamic>? languages;
+  Map<String, dynamic>? currentUser;
+  bool _membershipLoaded = false;
+  bool _isJoined = false;
+  bool _isUpdatingMembership = false;
+  List<_ProjectMember> _projectMembers = [];
+  List<dynamic> pullRequests = [];
+  List<dynamic> issues = [];
 
-int get mergedPulls =>
-    pullRequests.where((pr) => pr['merged_at'] != null).length;
+  int get openPulls =>
+      pullRequests.where((pr) => pr['state'] == 'open').length;
 
-int get closedPulls =>
-    pullRequests.where(
-      (pr) => pr['state'] == 'closed' && pr['merged_at'] == null,
-    ).length;
+  int get mergedPulls =>
+      pullRequests.where((pr) => pr['merged_at'] != null).length;
 
-int get openIssues =>
-    issues.where((issue) => issue['pull_request'] == null && issue['state'] == 'open').length;
+  int get closedPulls =>
+      pullRequests.where(
+        (pr) => pr['state'] == 'closed' && pr['merged_at'] == null,
+      ).length;
 
-int get closedIssues =>
-    issues.where((issue) => issue['pull_request'] == null && issue['state'] == 'closed').length;
+  int get openIssues => issues
+      .where((issue) => issue['pull_request'] == null && issue['state'] == 'open')
+      .length;
+
+  int get closedIssues => issues
+      .where((issue) => issue['pull_request'] == null && issue['state'] == 'closed')
+      .length;
   // ── メンバー上限（この人数に達したら新規募集を締め切る） ──
   static const int _maxMembers = 3;
-
-  // ── メンバー一覧（ダミーデータ） ──
-  static const List<_MemberData> _members = [
-    _MemberData(
-      name: 'やまだ',
-      role: 'オーナー',
-      roleColor: _AppColors.accentPurple,
-      avatarColor: Color(0xFFEC4899),
-      status: 'オンライン',
-      isOnline: true,
-      isSelf: true,
-    ),
-    _MemberData(
-      name: 'ゆいな',
-      role: 'コミッター',
-      roleColor: _AppColors.accentBlue,
-      avatarColor: Color(0xFF34D399),
-      status: '6日前',
-    ),
-    _MemberData(
-      name: 'りょうた',
-      role: 'デザイナー',
-      roleColor: _AppColors.accentPink,
-      avatarColor: Color(0xFFFACC15),
-      status: '15分前',
-    ),
-  ];
 
   // ── 現在のユーザー情報（仮の値。認証実装後は FirebaseAuth.currentUser 等に置き換える） ──
   static const String _currentUserId = 'self';
@@ -535,35 +520,273 @@ int get closedIssues =>
   final ScrollController _scrollController = ScrollController();
   bool _isSending = false;
 
-@override
-void initState() {
-  super.initState();
-  loadRepo();
-}
+  @override
+  void initState() {
+    super.initState();
+    _loadGitHubData();
+    _loadMembershipState();
+  }
 
-Future<void> loadRepo() async {
-  repo = await GitHubApi.getRepo(
-    owner: 'yosuke123apple-ux',
-    repo: 'sync',
-  );
+  Future<void> _loadMembershipState() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      if (mounted) {
+        setState(() {
+          _membershipLoaded = true;
+          _isJoined = false;
+          _projectMembers = [];
+        });
+      }
+      return;
+    }
 
-  languages = await GitHubApi.getLanguages(
-    owner: 'yosuke123apple-ux',
-    repo: 'sync',
-  );
+    try {
+      final snapshot = await FirebaseFirestore.instance
+          .collection('projects')
+          .doc(widget.projectId)
+          .get();
+      final data = snapshot.data();
+      final participantIds =
+          (data?['participantIds'] as List?)?.whereType<String>().toList() ??
+          <String>[];
+      final participantProfiles =
+          (data?['participantProfiles'] as List?)
+                  ?.whereType<Map>()
+                  .map((item) => Map<String, dynamic>.from(item))
+                  .toList() ??
+              <Map<String, dynamic>>[];
+      final fallbackProfiles = participantProfiles.isNotEmpty
+          ? participantProfiles
+          : participantIds
+              .map(
+                (id) => <String, dynamic>{
+                  'uid': id,
+                  'githubLogin': id,
+                  'githubName': id,
+                  'avatarUrl': '',
+                  'isOwner': false,
+                },
+              )
+              .toList();
 
-  pullRequests = await GitHubApi.getPullRequests(
-    owner: 'yosuke123apple-ux',
-    repo: 'sync',
-  );
+      if (!mounted) return;
+      setState(() {
+        _isJoined = participantIds.contains(user.uid);
+        _membershipLoaded = true;
+        _projectMembers = _buildProjectMembers(fallbackProfiles, user.uid);
+      });
+    } catch (e) {
+      debugPrint('参加状態の取得に失敗しました: $e');
+      if (mounted) {
+        setState(() {
+          _membershipLoaded = true;
+          _projectMembers = [];
+        });
+      }
+    }
+  }
 
-  issues = await GitHubApi.getIssues(
-    owner: 'yosuke123apple-ux',
-    repo: 'sync',
-  );
+  Future<void> _toggleMembership() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('先にGitHubログインしてください')),
+      );
+      return;
+    }
 
-  setState(() {});
-}
+    if (_isUpdatingMembership || widget.isOwnProject) return;
+
+    setState(() {
+      _isUpdatingMembership = true;
+    });
+
+    try {
+      final isJoining = !_isJoined;
+      final projectRef = FirebaseFirestore.instance
+          .collection('projects')
+          .doc(widget.projectId);
+      bool? joinedAfterUpdate;
+
+      await FirebaseFirestore.instance.runTransaction((transaction) async {
+        final snapshot = await transaction.get(projectRef);
+        final data = snapshot.data();
+        if (data == null) {
+          throw StateError('プロジェクトが見つかりません');
+        }
+
+        final participantIds =
+            (data['participantIds'] as List?)?.whereType<String>().toList() ??
+            <String>[];
+        final participantProfiles =
+            (data['participantProfiles'] as List?)
+                    ?.whereType<Map>()
+                    .map((item) => Map<String, dynamic>.from(item))
+                    .toList() ??
+                <Map<String, dynamic>>[];
+        final alreadyJoined = participantIds.contains(user.uid);
+        final currentMembers = data['currentMembers'] as int? ?? 1;
+        final maxMembers = data['memberCount'] as int?;
+        final myProfile = GitHubSession.currentMemberProfile(uid: user.uid) ??
+            <String, dynamic>{
+              'uid': user.uid,
+              'githubLogin':
+                  GitHubSession.currentLogin ?? user.email ?? user.uid,
+              'githubName':
+                  GitHubSession.displayName ??
+                  GitHubSession.currentLogin ??
+                  user.email ??
+                  user.uid,
+              'avatarUrl': '',
+              'isOwner': false,
+            };
+
+        if (!isJoining && alreadyJoined) {
+          final nextCount = currentMembers > 1 ? currentMembers - 1 : 1;
+          transaction.update(projectRef, {
+            'currentMembers': nextCount,
+            'participantIds':
+                participantIds.where((id) => id != user.uid).toList(),
+            'participantProfiles': participantProfiles
+                .where((member) => member['uid']?.toString() != user.uid)
+                .toList(),
+          });
+          joinedAfterUpdate = false;
+          return;
+        }
+
+        if (alreadyJoined) {
+          joinedAfterUpdate = false;
+          return;
+        }
+
+        if (maxMembers != null && currentMembers >= maxMembers) {
+          throw StateError('この募集はすでに上限に達しています');
+        }
+
+        transaction.update(projectRef, {
+          'currentMembers': currentMembers + 1,
+          'participantIds': [...participantIds, user.uid],
+          'participantProfiles': [...participantProfiles, myProfile],
+        });
+        joinedAfterUpdate = true;
+      });
+
+      if (!mounted) return;
+      setState(() {
+        _isJoined = joinedAfterUpdate ?? _isJoined;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(joinedAfterUpdate == true ? '参加しました' : '退出しました'),
+        ),
+      );
+
+      await _loadMembershipState();
+    } on StateError catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(e.message)),
+      );
+    } catch (e) {
+      debugPrint('参加状態の更新に失敗しました: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('参加状態の更新に失敗しました')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUpdatingMembership = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadGitHubData() async {
+    final token = GitHubSession.accessToken;
+    if (token == null) return;
+
+    try {
+      currentUser = GitHubSession.currentUser ??
+          await GitHubApi.getCurrentUser(token: token);
+      GitHubSession.currentUser = currentUser;
+
+      final selectedRepo = GitHubSession.selectedRepo;
+      if (selectedRepo != null) {
+        await _loadRepo(
+          owner: (selectedRepo['owner'] as Map<String, dynamic>?)?['login']
+                  as String? ??
+              '',
+          repoName: selectedRepo['name'] as String? ?? '',
+          token: token,
+        );
+        return;
+      }
+
+      final repositories = await GitHubApi.getRepositories(token: token);
+      if (repositories.isEmpty) {
+        if (mounted) {
+          setState(() {});
+        }
+        return;
+      }
+
+      final firstRepo = repositories.first as Map<String, dynamic>;
+      GitHubSession.selectedRepo = firstRepo;
+
+      await _loadRepo(
+        owner: (firstRepo['owner'] as Map<String, dynamic>?)?['login']
+                as String? ??
+            '',
+        repoName: firstRepo['name'] as String? ?? '',
+        token: token,
+      );
+    } catch (e) {
+      debugPrint('GitHubデータの読み込みに失敗しました: $e');
+      if (mounted) {
+        setState(() {});
+      }
+    }
+  }
+
+  Future<void> _loadRepo({
+    required String owner,
+    required String repoName,
+    required String token,
+  }) async {
+    if (owner.isEmpty || repoName.isEmpty) return;
+
+    repo = await GitHubApi.getRepo(
+      owner: owner,
+      repo: repoName,
+      token: token,
+    );
+
+    languages = await GitHubApi.getLanguages(
+      owner: owner,
+      repo: repoName,
+      token: token,
+    );
+
+    pullRequests = await GitHubApi.getPullRequests(
+      owner: owner,
+      repo: repoName,
+      token: token,
+    );
+
+    issues = await GitHubApi.getIssues(
+      owner: owner,
+      repo: repoName,
+      token: token,
+    );
+
+    if (mounted) {
+      setState(() {});
+    }
+  }
 
   @override
   void dispose() {
@@ -808,6 +1031,8 @@ Future<void> loadRepo() async {
           const SizedBox(height: 16), // Fibonacci spacing
           _buildBadgeRow(),
           const SizedBox(height: 16),
+          _buildMembershipAction(),
+          const SizedBox(height: 16),
           _buildDescription(),
           const SizedBox(height: 5),
           Container(height: 1, color: _AppColors.divider),
@@ -931,6 +1156,83 @@ Future<void> loadRepo() async {
     );
   }
 
+  Widget _buildMembershipAction() {
+    final user = FirebaseAuth.instance.currentUser;
+    final canAct = user != null && !widget.isOwnProject;
+    final label = _isJoined ? '退出する' : '参加する';
+    final message = _isJoined
+        ? 'この募集に参加中です'
+        : 'この募集に参加してメンバーに入ります';
+
+    if (widget.isOwnProject) {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.03),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: _AppColors.cardBorderSoft),
+        ),
+        child: const Text(
+          '自分の募集です',
+          style: TextStyle(
+            color: _AppColors.textSecondary,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        Expanded(
+          child: Text(
+            _membershipLoaded
+                ? message
+                : '参加状態を確認しています...',
+            style: const TextStyle(
+              color: _AppColors.textSecondary,
+              fontSize: 13,
+            ),
+          ),
+        ),
+        const SizedBox(width: 12),
+        SizedBox(
+          height: 42,
+          child: ElevatedButton.icon(
+            onPressed: canAct && _membershipLoaded && !_isUpdatingMembership
+                ? _toggleMembership
+                : null,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _isJoined
+                  ? const Color(0xFFDC2626)
+                  : _AppColors.accentPurple,
+              foregroundColor: Colors.white,
+              disabledBackgroundColor: Colors.white12,
+              disabledForegroundColor: Colors.white38,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            icon: _isUpdatingMembership
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : Icon(_isJoined ? Icons.logout_rounded : Icons.group_add),
+            label: Text(label),
+          ),
+        ),
+      ],
+    );
+  }
+
   // ── プロジェクト説明文 ──
   Widget _buildDescription() {
     return const Text(
@@ -996,16 +1298,21 @@ Future<void> loadRepo() async {
 
   // ── リポジトリ名 + URL（GitHubアイコン付き） ──
   Widget _buildRepoHeader() {
+    final repoFullName = repo?['full_name'] as String? ??
+        GitHubSession.selectedRepo?['full_name'] as String?;
+    final userLogin = GitHubSession.currentLogin;
+    final userDisplayName = GitHubSession.displayName;
+
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const FaIcon(FontAwesomeIcons.github, color: Colors.white, size: 32),
         const SizedBox(width: 13),
-        const Expanded(
+        Expanded(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
+              const Text(
                 'GitHubリポジトリ',
                 style: TextStyle(
                   color: _AppColors.textPrimary,
@@ -1013,15 +1320,30 @@ Future<void> loadRepo() async {
                   fontWeight: FontWeight.w700,
                 ),
               ),
-              SizedBox(height: 3),
+              const SizedBox(height: 3),
               Text(
-                'github.com/flutter/flutter',
-                style: TextStyle(
+                repoFullName != null
+                    ? 'github.com/$repoFullName'
+                    : 'GitHubでログインするとリポジトリ情報を取得します',
+                style: const TextStyle(
                   color: _AppColors.textSecondary,
                   fontSize: 13,
                   height: 1.4,
                 ),
               ),
+              if (userLogin != null || userDisplayName != null) ...[
+                const SizedBox(height: 6),
+                Text(
+                  userDisplayName == null || userDisplayName == userLogin
+                      ? '@$userLogin'
+                      : '$userDisplayName (@$userLogin)',
+                  style: const TextStyle(
+                    color: Colors.white54,
+                    fontSize: 12,
+                    height: 1.3,
+                  ),
+                ),
+              ],
             ],
           ),
         ),
@@ -1030,28 +1352,31 @@ Future<void> loadRepo() async {
   }
 
   // ── Star / Fork / Issue の統計行 ──
-  // ※ ここの数値はダミー（実データとは連携していない）
   Widget _buildRepoStatsRow() {
+    final stars = repo?['stargazers_count']?.toString() ?? '...';
+    final forks = repo?['forks_count']?.toString() ?? '...';
+    final issuesCount = repo?['open_issues_count']?.toString() ?? '...';
+
     return Row(
       children: [
         _buildRepoStatItem(
           icon: Icons.star_rounded,
           iconColor: const Color(0xFFFACC15),
-          value: '128',
+          value: stars,
           label: 'Stars',
         ),
         const SizedBox(width: 34), // Fibonacci spacing
         _buildRepoStatItem(
           icon: Icons.call_split_rounded,
           iconColor: _AppColors.accentBlue,
-          value: '24',
+          value: forks,
           label: 'Forks',
         ),
         const SizedBox(width: 34),
         _buildRepoStatItem(
           icon: Icons.error_outline_rounded,
           iconColor: _AppColors.accentPink,
-          value: '3',
+          value: issuesCount,
           label: 'Issues',
         ),
       ],
@@ -1088,8 +1413,16 @@ Future<void> loadRepo() async {
   }
 
   // ── 最新コミット行（ハッシュ + メッセージ + 経過時間） ──
-  // ※ ここも実データとは連携していないダミー表示
   Widget _buildLastCommitRow() {
+    final updatedAt = repo?['updated_at'] as String?;
+    final updatedLabel = updatedAt == null
+        ? '...'
+        : updatedAt.replaceFirst('T', ' ').replaceFirst('Z', '');
+    final branchName = repo?['default_branch']?.toString() ?? 'main';
+    final commitMessage = repo == null
+        ? 'GitHubログイン後に最新のリポジトリ情報が表示されます'
+        : '最新の更新を取得しました';
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
       decoration: BoxDecoration(
@@ -1101,7 +1434,7 @@ Future<void> loadRepo() async {
           Icon(Icons.commit_rounded, color: _AppColors.textSecondary, size: 16),
           const SizedBox(width: 13),
           Text(
-            'a35b230',
+            branchName,
             style: TextStyle(
               color: _AppColors.accentPurple,
               fontSize: 13,
@@ -1112,7 +1445,7 @@ Future<void> loadRepo() async {
           const SizedBox(width: 13),
           Expanded(
             child: Text(
-              'test: add unit test coverage',
+              commitMessage,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 color: _AppColors.textPrimary,
@@ -1121,27 +1454,102 @@ Future<void> loadRepo() async {
             ),
           ),
           const SizedBox(width: 13),
-          const Text(
-            '3時間前',
-            style: TextStyle(color: _AppColors.textSecondary, fontSize: 12),
+          Text(
+            updatedLabel,
+            style: const TextStyle(color: _AppColors.textSecondary, fontSize: 12),
           ),
         ],
       ),
     );
   }
 
+  Color _memberColorFromKey(String key) {
+    const palette = [
+      Color(0xFFEC4899),
+      Color(0xFF34D399),
+      Color(0xFFFACC15),
+      Color(0xFF60A5FA),
+      Color(0xFFA78BFA),
+      Color(0xFFF97316),
+    ];
+    if (key.isEmpty) return palette.first;
+    return palette[key.hashCode.abs() % palette.length];
+  }
+
+  List<_ProjectMember> _buildProjectMembers(
+    List<Map<String, dynamic>> participantProfiles,
+    String selfUid,
+  ) {
+    return participantProfiles.map((profile) {
+      final uid = profile['uid']?.toString() ?? '';
+        final githubLogin = (profile['githubLogin'] as String?)?.trim() ?? '';
+        final githubName = (profile['githubName'] as String?)?.trim() ?? '';
+        final isOwner = profile['isOwner'] == true;
+      final displayName = githubName.isNotEmpty
+          ? githubName
+          : (githubLogin.isNotEmpty
+              ? githubLogin
+              : 'GitHubユーザー');
+      final role = isOwner ? 'オーナー' : 'メンバー';
+      final roleColor = isOwner
+          ? _AppColors.accentPurple
+          : _AppColors.accentBlue;
+      final baseKey = githubLogin.isNotEmpty ? githubLogin : uid;
+
+      return _ProjectMember(
+        uid: uid,
+        githubLogin: githubLogin,
+        githubName: displayName,
+        role: role,
+        roleColor: roleColor,
+        avatarColor: _memberColorFromKey(baseKey),
+        status: githubLogin.isNotEmpty ? '@$githubLogin' : 'GitHub未設定',
+        isOnline: true,
+        isSelf: uid.isNotEmpty && uid == selfUid,
+        isOwner: isOwner,
+      );
+    }).toList();
+  }
+
   // ============================================================
   // メンバーセクション（見出し／一覧／招待ボタン）
   // ============================================================
   Widget _buildMembersSection() {
+    final members = _projectMembers;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _buildMembersHeader(),
         const SizedBox(height: 13), // Fibonacci spacing
-        ..._members
-            .map(_buildMemberRow)
-            .expand((row) => [row, const SizedBox(height: 10)]),
+        if (!_membershipLoaded)
+          const Padding(
+            padding: EdgeInsets.symmetric(vertical: 18),
+            child: Center(
+              child: CircularProgressIndicator(strokeWidth: 2),
+            ),
+          )
+        else if (members.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.03),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: _AppColors.cardBorderSoft),
+            ),
+            child: const Text(
+              'まだ参加メンバーはいません',
+              style: TextStyle(
+                color: _AppColors.textSecondary,
+                fontSize: 13,
+              ),
+            ),
+          )
+        else
+          ...members
+              .map(_buildMemberRow)
+              .expand((row) => [row, const SizedBox(height: 10)]),
         const SizedBox(height: 13),
         _buildInviteButton(),
       ],
@@ -1174,16 +1582,16 @@ Future<void> loadRepo() async {
           ),
         ),
         Text(
-          '${_members.length}/$_maxMembers人',
+          '${_projectMembers.length}/$_maxMembers人',
           style: const TextStyle(color: _AppColors.textSecondary, fontSize: 12),
         ),
       ],
     );
   }
 
-  // ── メンバー1行（アバター＋名前＋役割バッジ／右：状態） ──
+  // ── メンバー1行（アバター＋名前＋役割バッジ） ──
   // ※ isSelf の場合は縦の余白を詰めて、他メンバーと一目で区別できるようにする
-  Widget _buildMemberRow(_MemberData member) {
+  Widget _buildMemberRow(_ProjectMember member) {
     return Container(
       padding: EdgeInsets.symmetric(
         horizontal: 13,
@@ -1211,7 +1619,7 @@ Future<void> loadRepo() async {
                 Row(
                   children: [
                     Text(
-                      member.name,
+                      member.githubName,
                       style: const TextStyle(
                         color: _AppColors.textPrimary,
                         fontSize: 14,
@@ -1227,17 +1635,6 @@ Future<void> loadRepo() async {
                 const SizedBox(height: 3),
                 _buildMemberRoleBadge(member),
               ],
-            ),
-          ),
-          const SizedBox(width: 13),
-          Text(
-            member.status,
-            style: TextStyle(
-              color: member.isOnline
-                  ? const Color(0xFF34D399)
-                  : _AppColors.textSecondary,
-              fontSize: 12,
-              fontWeight: member.isOnline ? FontWeight.w600 : FontWeight.w400,
             ),
           ),
         ],
@@ -1264,50 +1661,31 @@ Future<void> loadRepo() async {
     );
   }
 
-  // ── メンバーアバター（頭文字＋オンライン状態ドット） ──
+  // ── メンバーアバター（頭文字） ──
   // ※ isSelf は行の縦幅を詰めているぶん、アバターも少し小さくして馴染ませる
-  Widget _buildMemberAvatar(_MemberData member) {
+  Widget _buildMemberAvatar(_ProjectMember member) {
     final double size = member.isSelf ? 38 : 44;
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        Container(
-          width: size,
-          height: size,
-          alignment: Alignment.center,
-          decoration: BoxDecoration(
-            color: member.avatarColor.withOpacity(0.85),
-            shape: BoxShape.circle,
-          ),
-          child: Text(
-            member.name.substring(0, 1),
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: member.isSelf ? 12 : 14,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
+    return Container(
+      width: size,
+      height: size,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: member.avatarColor.withOpacity(0.85),
+        shape: BoxShape.circle,
+      ),
+      child: Text(
+        member.githubName.isNotEmpty ? member.githubName.substring(0, 1) : '?',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: member.isSelf ? 12 : 14,
+          fontWeight: FontWeight.w700,
         ),
-        if (member.isOnline)
-          Positioned(
-            right: -1,
-            bottom: -1,
-            child: Container(
-              width: 11,
-              height: 11,
-              decoration: BoxDecoration(
-                color: const Color(0xFF34D399),
-                shape: BoxShape.circle,
-                border: Border.all(color: _AppColors.panel, width: 2),
-              ),
-            ),
-          ),
-      ],
+      ),
     );
   }
 
   // ── メンバーの役割バッジ ──
-  Widget _buildMemberRoleBadge(_MemberData member) {
+  Widget _buildMemberRoleBadge(_ProjectMember member) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
@@ -1329,7 +1707,7 @@ Future<void> loadRepo() async {
   // ── メンバー招待ボタン（Container + InkWell） ──
   // ※ 上限（_maxMembers）に達している場合はグレーアウトしてタップ不可にする
   Widget _buildInviteButton() {
-    final bool isFull = _members.length >= _maxMembers;
+    final bool isFull = _projectMembers.length >= _maxMembers;
     final Color themeColor = isFull
         ? _AppColors.textSecondary
         : _AppColors.accentPurple;
@@ -1444,7 +1822,10 @@ Future<void> loadRepo() async {
                 ),
                 const SizedBox(height: 12),
 
-            Row(
+          
+SingleChildScrollView(
+  scrollDirection: Axis.horizontal,
+  child: Row(
   children: [
     // Forks
     Row(
@@ -1641,6 +2022,7 @@ Row(
 
   ],
 )
+),
               ],
             ),
           ),
@@ -2380,10 +2762,18 @@ Row(
                 ),
               ),
               const SizedBox(width: 8),
-              _buildInputIconButton(
-                icon: Icons.emoji_emotions_outlined,
-                onTap: _showEmojiPicker,
-              ),
+            _buildInputIconButton(
+  icon: Icons.emoji_emotions_outlined,
+  onTap: _showEmojiPicker,
+),
+
+const SizedBox(width: 8),
+
+_buildInputIconButton(
+  icon: Icons.code, // GitHub用
+  onTap: _openGitHubShare,
+),
+              
               const SizedBox(width: 8),
               _buildSendButton(),
             ],
@@ -2451,5 +2841,516 @@ Row(
         ),
       ),
     );
+  }
+
+  String _formatCommitTime(String? isoTime) {
+    final parsed = isoTime == null ? null : DateTime.tryParse(isoTime);
+    if (parsed == null) return '-';
+    final local = parsed.toLocal();
+    final y = local.year.toString().padLeft(4, '0');
+    final m = local.month.toString().padLeft(2, '0');
+    final d = local.day.toString().padLeft(2, '0');
+    final hh = local.hour.toString().padLeft(2, '0');
+    final mm = local.minute.toString().padLeft(2, '0');
+    return '$y/$m/$d $hh:$mm';
+  }
+
+  String _commitAuthorName(Map<String, dynamic> commit) {
+    final author = commit['author'] as Map<String, dynamic>?;
+    final commitInfo = commit['commit'] as Map<String, dynamic>?;
+    final commitAuthor = commitInfo?['author'] as Map<String, dynamic>?;
+    return author?['login'] as String? ??
+        commitAuthor?['name'] as String? ??
+        'GitHubユーザー';
+  }
+
+  String _commitMessage(Map<String, dynamic> commit) {
+    final commitInfo = commit['commit'] as Map<String, dynamic>?;
+    return commitInfo?['message'] as String? ?? '-';
+  }
+
+  String _commitSha(Map<String, dynamic> commit) {
+    return commit['sha'] as String? ?? '';
+  }
+
+  String _commitTime(Map<String, dynamic> commit) {
+    final commitInfo = commit['commit'] as Map<String, dynamic>?;
+    final author = commitInfo?['author'] as Map<String, dynamic>?;
+    return _formatCommitTime(author?['date'] as String?);
+  }
+
+  String _buildCommitShareText({
+    required Map<String, dynamic> repo,
+    required Map<String, dynamic> commit,
+    required Map<String, dynamic> commitDetail,
+  }) {
+    final owner = (repo['owner'] as Map<String, dynamic>?)?['login'] as String? ??
+        '';
+    final repoName = repo['name'] as String? ?? '';
+    final branch = repo['default_branch'] as String? ?? 'main';
+    final sha = _commitSha(commit);
+    final shortSha = sha.length > 7 ? sha.substring(0, 7) : sha;
+    final authorName = _commitAuthorName(commit);
+    final message = _commitMessage(commit);
+    final time = _commitTime(commit);
+    final url = 'https://github.com/$owner/$repoName/commit/$sha';
+    final files = (commitDetail['files'] as List?)
+            ?.whereType<Map>()
+            .map((file) => Map<String, dynamic>.from(file))
+            .toList() ??
+        <Map<String, dynamic>>[];
+    final stats = commitDetail['stats'] as Map<String, dynamic>?;
+    final additions = stats?['additions']?.toString() ?? '0';
+    final deletions = stats?['deletions']?.toString() ?? '0';
+    final fileLines = files.isEmpty
+        ? 'なし'
+        : files.map((file) {
+            final filename = file['filename'] as String? ?? '-';
+            final status = file['status'] as String? ?? '-';
+            final fileAdditions = file['additions']?.toString() ?? '0';
+            final fileDeletions = file['deletions']?.toString() ?? '0';
+            return '- $filename [$status, +$fileAdditions / -$fileDeletions]';
+          }).join('\n');
+
+    return [
+      '📌 GitHubコミット共有',
+      'コミットユーザー名: $authorName',
+      'コミットメッセージ: $message',
+      'commit SHA: $sha',
+      '時間: $time',
+      'ブランチ: $branch',
+      'GitHub URL: $url',
+      '短縮SHA: $shortSha',
+      '',
+      '変更ファイル一覧:',
+      fileLines,
+      '',
+      'modified / added / deleted: ${files.length} files',
+      'additions: $additions',
+      'deletions: $deletions',
+    ].join('\n');
+  }
+
+  Future<void> _shareCommitToChat({
+    required Map<String, dynamic> repo,
+    required Map<String, dynamic> commit,
+    required Map<String, dynamic> commitDetail,
+  }) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) {
+      throw StateError('GitHubログインしてください');
+    }
+
+    final senderName = GitHubSession.displayName ??
+        user.displayName ??
+        GitHubSession.currentLogin ??
+        'GitHubユーザー';
+    final text = _buildCommitShareText(
+      repo: repo,
+      commit: commit,
+      commitDetail: commitDetail,
+    );
+
+    await ServiceLocator.chatService.sendMessage(
+      widget.projectId,
+      senderId: user.uid,
+      senderName: senderName,
+      text: text,
+    );
+    _scrollToBottom();
+  }
+
+  Future<void> _openGitHubShare() async {
+    final repo = GitHubSession.selectedRepo;
+    final token = GitHubSession.accessToken;
+
+    if (repo == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('リポジトリが選択されていません')),
+      );
+      return;
+    }
+
+    if (token == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('GitHubログインしてください')),
+      );
+      return;
+    }
+
+    final owner = (repo['owner'] as Map<String, dynamic>?)?['login'] as String? ??
+        '';
+    final name = repo['name'] as String? ?? '';
+    if (owner.isEmpty || name.isEmpty) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('リポジトリ情報を取得できませんでした')),
+      );
+      return;
+    }
+
+    try {
+      final commitsRaw = await GitHubApi.getCommits(
+        owner: owner,
+        repo: name,
+        token: token,
+        perPage: 15,
+      );
+      final commits = commitsRaw
+          .whereType<Map>()
+          .map((commit) => Map<String, dynamic>.from(commit))
+          .toList();
+
+      if (commits.isEmpty) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('コミットが見つかりませんでした')),
+        );
+        return;
+      }
+
+      if (!mounted) return;
+      await showDialog<void>(
+        context: context,
+        builder: (dialogContext) {
+          Map<String, dynamic> selectedCommit = commits.first;
+          bool isSharing = false;
+          String? errorMessage;
+
+          Future<void> shareSelected(StateSetter setDialogState) async {
+            if (isSharing) return;
+
+            setDialogState(() {
+              isSharing = true;
+              errorMessage = null;
+            });
+
+            try {
+              final sha = _commitSha(selectedCommit);
+              final commitDetail = await GitHubApi.getCommitDetails(
+                owner: owner,
+                repo: name,
+                sha: sha,
+                token: token,
+              );
+              await _shareCommitToChat(
+                repo: repo,
+                commit: selectedCommit,
+                commitDetail: commitDetail,
+              );
+              if (dialogContext.mounted) {
+                Navigator.of(dialogContext).pop();
+              }
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('コミットをチャットに共有しました')),
+                );
+              }
+            } catch (e) {
+              debugPrint('コミット共有に失敗しました: $e');
+              setDialogState(() {
+                errorMessage = 'コミット詳細の取得または共有に失敗しました';
+              });
+            } finally {
+              if (dialogContext.mounted) {
+                setDialogState(() {
+                  isSharing = false;
+                });
+              }
+            }
+          }
+
+          return Dialog(
+            backgroundColor: const Color(0xFF0B1022),
+            insetPadding: const EdgeInsets.symmetric(
+              horizontal: 20,
+              vertical: 24,
+            ),
+            child: StatefulBuilder(
+              builder: (context, setDialogState) {
+                final selectedAuthor = _commitAuthorName(selectedCommit);
+                final selectedMessage = _commitMessage(selectedCommit);
+                final selectedSha = _commitSha(selectedCommit);
+                final selectedTime = _commitTime(selectedCommit);
+                final selectedShortSha =
+                    selectedSha.length > 7 ? selectedSha.substring(0, 7) : selectedSha;
+                final selectedUrl =
+                    'https://github.com/$owner/$name/commit/$selectedSha';
+                final branch = repo['default_branch'] as String? ?? 'main';
+
+                return SizedBox(
+                  width: 860,
+                  height: 720,
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            const Expanded(
+                              child: Text(
+                                '最新コミットを共有',
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 20,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ),
+                            IconButton(
+                              onPressed: () => Navigator.of(dialogContext).pop(),
+                              icon: const Icon(
+                                Icons.close,
+                                color: Colors.white54,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          '$owner/$name ・ ブランチ: $branch',
+                          style: const TextStyle(color: Colors.white70),
+                        ),
+                        const SizedBox(height: 12),
+                        Container(
+                          width: double.infinity,
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withOpacity(0.04),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(
+                              color: Colors.white.withOpacity(0.08),
+                            ),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                '選択中',
+                                style: TextStyle(
+                                  color: Colors.white.withOpacity(0.55),
+                                  fontSize: 12,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                selectedMessage,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'ユーザー: $selectedAuthor',
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'SHA: $selectedSha',
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                '時間: $selectedTime',
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                'URL: $selectedUrl',
+                                style: const TextStyle(color: Colors.white70),
+                              ),
+                            ],
+                          ),
+                        ),
+                        if (errorMessage != null) ...[
+                          const SizedBox(height: 12),
+                          Text(
+                            errorMessage!,
+                            style: const TextStyle(
+                              color: Colors.redAccent,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 12),
+                        const Text(
+                          'コミット一覧',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Expanded(
+                          child: ListView.separated(
+                            itemCount: commits.length,
+                            separatorBuilder: (_, _) =>
+                                const SizedBox(height: 10),
+                            itemBuilder: (context, index) {
+                              final commit = commits[index];
+                              final isSelected =
+                                  _commitSha(commit) == _commitSha(selectedCommit);
+                              return InkWell(
+                                borderRadius: BorderRadius.circular(14),
+                                onTap: () {
+                                  setDialogState(() {
+                                    selectedCommit = commit;
+                                  });
+                                },
+                                child: AnimatedContainer(
+                                  duration: const Duration(milliseconds: 180),
+                                  padding: const EdgeInsets.all(14),
+                                  decoration: BoxDecoration(
+                                    color: isSelected
+                                        ? const Color(0xFF1B2440)
+                                        : Colors.white.withOpacity(0.03),
+                                    borderRadius: BorderRadius.circular(14),
+                                    border: Border.all(
+                                      color: isSelected
+                                          ? const Color(0xFF8F7CFF)
+                                              .withOpacity(0.5)
+                                          : Colors.white.withOpacity(0.08),
+                                    ),
+                                  ),
+                                  child: Row(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Container(
+                                        width: 42,
+                                        height: 42,
+                                        decoration: BoxDecoration(
+                                          borderRadius:
+                                              BorderRadius.circular(10),
+                                          color: const Color(0xFF8F7CFF)
+                                              .withOpacity(0.12),
+                                        ),
+                                        child: const Icon(
+                                          Icons.commit_rounded,
+                                          color: Color(0xFFB8A7FF),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              _commitMessage(commit),
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 14,
+                                                fontWeight: FontWeight.w700,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 5),
+                                            Text(
+                                              'ユーザー: ${_commitAuthorName(commit)}',
+                                              style: const TextStyle(
+                                                color: Colors.white70,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 3),
+                                            Text(
+                                              'SHA: ${_commitSha(commit)}',
+                                              style: const TextStyle(
+                                                color: Colors.white54,
+                                                fontSize: 12,
+                                                fontFamily: 'monospace',
+                                              ),
+                                            ),
+                                            const SizedBox(height: 3),
+                                            Text(
+                                              '時間: ${_commitTime(commit)}',
+                                              style: const TextStyle(
+                                                color: Colors.white54,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                            const SizedBox(height: 3),
+                                            Text(
+                                              'GitHub URL: https://github.com/$owner/$name/commit/${_commitSha(commit)}',
+                                              style: const TextStyle(
+                                                color: Colors.white54,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      if (isSelected)
+                                        const Icon(
+                                          Icons.check_circle_rounded,
+                                          color: Color(0xFF8F7CFF),
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                        const SizedBox(height: 14),
+                        Row(
+                          children: [
+                            TextButton(
+                              onPressed: isSharing
+                                  ? null
+                                  : () => Navigator.of(dialogContext).pop(),
+                              child: const Text('キャンセル'),
+                            ),
+                            const Spacer(),
+                            Text(
+                              selectedShortSha.isEmpty
+                                  ? ''
+                                  : '共有対象: $selectedShortSha',
+                              style: const TextStyle(color: Colors.white54),
+                            ),
+                            const SizedBox(width: 12),
+                            ElevatedButton.icon(
+                              onPressed:
+                                  isSharing ? null : () => shareSelected(setDialogState),
+                              icon: isSharing
+                                  ? const SizedBox(
+                                      width: 14,
+                                      height: 14,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: Colors.white,
+                                      ),
+                                    )
+                                  : const Icon(Icons.share_rounded),
+                              label: Text(isSharing ? '共有中' : '共有'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF7C5CFF),
+                                foregroundColor: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          );
+        },
+      );
+    } catch (e) {
+      debugPrint('コミット一覧の取得に失敗しました: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('コミット一覧の取得に失敗しました')),
+      );
+    }
   }
 }

@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'github_session.dart';
 
 class PostPage extends StatefulWidget {
   const PostPage({super.key});
@@ -155,15 +157,34 @@ class _PostPageState extends State<PostPage> {
       });
 
       try {
+        final user = FirebaseAuth.instance.currentUser;
+        final ownerId = user?.uid ?? '';
+        final ownerLogin =
+            GitHubSession.currentLogin ?? user?.email?.split('@').first ?? 'unknown';
+        final ownerInfo = GitHubSession.displayName ?? ownerLogin;
+
         await _firestore.collection('projects').add({
           'title': _titleController.text.trim(),
           'description': _descriptionController.text.trim(),
           'memberCount': _selectedMemberCount ?? 1,
           'currentMembers': 1,
+          'participantIds': ownerId.isEmpty ? <String>[] : <String>[ownerId],
+          'participantProfiles': ownerId.isEmpty
+              ? <Map<String, dynamic>>[]
+              : [
+                  {
+                    'uid': ownerId,
+                    'githubLogin': ownerLogin,
+                    'githubName': ownerInfo,
+                    'avatarUrl': user?.photoURL ?? '',
+                    'isOwner': true,
+                  },
+                ],
           'role': _selectedRole,
           'level': _selectedLevel,
           'languages': _selectedLanguages,
-          'ownerInfo': 'やまた_Dev',
+          'ownerInfo': ownerInfo,
+          'ownerId': ownerId,
           'createdAt': FieldValue.serverTimestamp(),
         });
       } catch (e, stackTrace) {

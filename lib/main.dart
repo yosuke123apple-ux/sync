@@ -5,12 +5,11 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'firebase_options.dart';
 import 'post_page.dart';
 import 'task_page.dart';
+import 'github_session.dart';
 // streak feature removed per request
 import 'package:firebase_auth/firebase_auth.dart';
 import 'dart:async'; // ★これを追加します！
 //githubログイン実装コードここから
-import 'dart:convert';
-import 'package:http/http.dart' as http;
 import 'github_api.dart';
 import 'dart:ui';
 class LoginPage extends StatefulWidget {
@@ -31,32 +30,58 @@ class _LoginPageState extends State<LoginPage> {
       _isSigningIn = true;
     });
 
-    try {//ウェブアプリかスマホアプリかで自動で切り替えているコード
+    try {
+      // ウェブアプリかスマホアプリかで自動で切り替える
+      UserCredential userCredential;
+
       if (kIsWeb) {
-        await FirebaseAuth.instance.signInWithPopup(GithubAuthProvider());
+        userCredential = await FirebaseAuth.instance.signInWithPopup(
+          GithubAuthProvider(),
+        );
       } else {
-        await FirebaseAuth.instance.signInWithProvider(GithubAuthProvider());
+        userCredential = await FirebaseAuth.instance.signInWithProvider(
+          GithubAuthProvider(),//githubで認証するという物
+        );
       }
-if (kIsWeb) {
-  await FirebaseAuth.instance.signInWithPopup(GithubAuthProvider());
-} else {
-  await FirebaseAuth.instance.signInWithProvider(GithubAuthProvider());
-}
 
-// ここに追加
-final user = FirebaseAuth.instance.currentUser;
+      final githubCredential =//credential=googleからの認証をgithubの形に翻訳
+          userCredential.credential as OAuthCredential?;
+//githubのアクセストークンをgithubsessionに保存する
+      GitHubSession.accessToken = githubCredential?.accessToken;
 
-debugPrint('GitHub UID: ${user?.uid}');
-debugPrint('GitHub email: ${user?.email}');
-debugPrint('GitHub name: ${user?.displayName}');
+      debugPrint('GitHub Token: ${GitHubSession.accessToken}');
+      final user = FirebaseAuth.instance.currentUser;
 
-if (!context.mounted) return;
+      debugPrint('GitHub UID: ${user?.uid}');
+      debugPrint('GitHub email: ${user?.email}');
+      debugPrint('GitHub name: ${user?.displayName}');
 
-Navigator.of(context).pushReplacement(
-  MaterialPageRoute(
-    builder: (_) => const HomePage(),
-  ),
-);
+      final token = GitHubSession.accessToken;
+      if (token != null) {
+        try {
+          GitHubSession.currentUser = await GitHubApi.getCurrentUser(
+            token: token,
+          );
+          final repositories = await GitHubApi.getRepositories(token: token);
+          GitHubSession.repositories = repositories
+              .whereType<Map>()
+              .map((repo) => Map<String, dynamic>.from(repo))
+              .toList();
+          if (repositories.isNotEmpty) {
+            GitHubSession.selectedRepo =
+                repositories.first as Map<String, dynamic>;
+          } else {
+            GitHubSession.selectedRepo = null;
+          }
+          debugPrint('GitHub current user: ${GitHubSession.currentLogin}');
+          debugPrint(
+            'GitHub selected repo: ${GitHubSession.selectedRepo?['full_name']}',
+          );
+        } catch (e) {
+          debugPrint('GitHub API連携に失敗: $e');
+        }
+      }
+
       if (!context.mounted) return;
 
       Navigator.of(context).pushReplacement(
@@ -406,6 +431,8 @@ class ProjectInfo {
   final int currentMembers;
   final int? maxMembers;
   final List<String> tags;
+  final List<String> participantIds;
+  final List<Map<String, dynamic>> participantProfiles;
 
   const ProjectInfo({
     required this.id,
@@ -416,6 +443,8 @@ class ProjectInfo {
     required this.role,
     required this.currentMembers,
     required this.tags,
+    required this.participantIds,
+    required this.participantProfiles,
     this.maxMembers,
   });
 
@@ -426,7 +455,15 @@ class ProjectInfo {
     final languages =
         (data['languages'] as List?)?.whereType<String>().toList() ??
         const <String>[];
-    final maxMembers = data['memberCount'] as int?;
+  final maxMembers = data['memberCount'] as int?;
+  final participantIds =
+      (data['participantIds'] as List?)?.whereType<String>().toList() ??
+      const <String>[];
+  final participantProfiles = (data['participantProfiles'] as List?)
+          ?.whereType<Map>()
+          .map((item) => Map<String, dynamic>.from(item))
+          .toList() ??
+      const <Map<String, dynamic>>[];
 
 return ProjectInfo(
   id: id,
@@ -438,6 +475,8 @@ return ProjectInfo(
   currentMembers: data['currentMembers'] as int? ?? 1,
   maxMembers: maxMembers,
   tags: [role, level, ...languages.take(3)],
+  participantIds: participantIds,
+  participantProfiles: participantProfiles,
 );
   }
 
@@ -571,13 +610,87 @@ Future<void> _handleJoinPressed(
     project: project,
   );
 }
+
+Future<void> _handleDeleteProject(
+  BuildContext context, {
+  required ProjectInfo project,
+}) async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('GitHubログインしてください')),
+    );
+    return;
+  }
+
+  if (project.ownerId != user.uid) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('自分の募集だけ削除できます')),
+    );
+    return;
+  }
+
+  final shouldDelete = await showDialog<bool>(
+    context: context,
+    builder: (dialogContext) => AlertDialog(
+      backgroundColor: const Color(0xFF0B1022),
+      title: const Text(
+        '本当に消しますか',
+        style: TextStyle(color: Colors.white),
+      ),
+      content: const Text(
+        'この募集カードを削除すると元に戻せません。',
+        style: TextStyle(color: Colors.white70),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(dialogContext).pop(false),
+          child: const Text('キャンセル'),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.of(dialogContext).pop(true),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.redAccent,
+            foregroundColor: Colors.white,
+          ),
+          child: const Text('消します'),
+        ),
+      ],
+    ),
+  );
+
+  if (shouldDelete != true || !context.mounted) return;
+
+  try {
+    await FirebaseFirestore.instance.collection('projects').doc(project.id).delete();
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('募集を削除しました')),
+    );
+  } catch (e) {
+    debugPrint('募集の削除に失敗しました: $e');
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('削除に失敗しました')),
+    );
+  }
+}
 Future<void> _confirmJoinAndOpenTask(
   BuildContext context, {
   required ProjectInfo project,
 }) async {
   final user = FirebaseAuth.instance.currentUser;
+  if (user == null) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('参加するには先にGitHubログインしてください')),
+    );
+    return;
+  }
 
-final isOwnProject = project.ownerId == user?.uid;
+  final isOwnProject = project.ownerId == user.uid;
   final dialogTitle = isOwnProject ? '自分の募集です' : 'このチームに参加しますか';
   final dialogContent = isOwnProject
       ? '自分が投稿した募集でも、そのままタスクページへ進めます。'
@@ -608,21 +721,91 @@ final isOwnProject = project.ownerId == user?.uid;
   if (shouldJoin != true || !context.mounted) return;
 
   if (!isOwnProject) {
-    if (project.maxMembers != null && project.currentMembers >= project.maxMembers!) {
+    try {
+      bool? joinedAfterUpdate;
+      final projectRef = FirebaseFirestore.instance
+          .collection('projects')
+          .doc(project.id);
+
+      final joinResult = await FirebaseFirestore.instance.runTransaction<
+          bool>((transaction) async {
+        final snapshot = await transaction.get(projectRef);
+        final data = snapshot.data();
+        if (data == null) {
+          throw StateError('プロジェクトが見つかりません');
+        }
+
+        final participantIds =
+            (data['participantIds'] as List?)?.whereType<String>().toList() ??
+            <String>[];
+        final participantProfiles =
+            (data['participantProfiles'] as List?)
+                    ?.whereType<Map>()
+                    .map((item) => Map<String, dynamic>.from(item))
+                    .toList() ??
+                <Map<String, dynamic>>[];
+        final alreadyJoined = participantIds.contains(user.uid);
+        final currentMembers = data['currentMembers'] as int? ?? 1;
+        final maxMembers = data['memberCount'] as int?;
+        final gitHubName = GitHubSession.displayName ?? user.displayName;
+        debugPrint('GitHub displayName: ${GitHubSession.displayName}');
+debugPrint('Firebase displayName: ${user.displayName}');
+debugPrint('hello world');
+        final gitHubLogin = GitHubSession.currentLogin ?? user.email ?? user.uid;
+        final myProfile = GitHubSession.currentMemberProfile(uid: user.uid) ??
+            <String, dynamic>{
+              'uid': user.uid,
+              'githubLogin': gitHubLogin,
+              'githubName': gitHubName ?? gitHubLogin,
+              'avatarUrl': '',
+              'isOwner': false,
+            };
+
+        if (!alreadyJoined &&
+            maxMembers != null &&
+            currentMembers >= maxMembers) {
+          return false;
+        }
+
+        if (alreadyJoined) {
+          final nextParticipantProfiles = participantProfiles
+              .where((member) => member['uid']?.toString() != user.uid)
+              .toList();
+          transaction.update(projectRef, {
+            'currentMembers': currentMembers > 1 ? currentMembers - 1 : 1,
+            'participantIds':
+                participantIds.where((id) => id != user.uid).toList(),
+            'participantProfiles': nextParticipantProfiles,
+          });
+          joinedAfterUpdate = false;
+          return true;
+        }
+
+        transaction.update(projectRef, {
+          'currentMembers': currentMembers + 1,
+          'participantIds': [...participantIds, user.uid],
+          'participantProfiles': [...participantProfiles, myProfile],
+        });
+        joinedAfterUpdate = true;
+        return true;
+      });
+
+      if (!joinResult) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('この募集はすでに上限に達しています')),
+        );
+        return;
+      }
+
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('この募集はすでに上限に達しています')),
+        SnackBar(
+          content: Text(
+            joinedAfterUpdate == true ? '参加しました' : '退出しました',
+          ),
+        ),
       );
-      return;
-    }
-
-    try {
-      await FirebaseFirestore.instance
-          .collection('projects')
-          .doc(project.id)
-          .update({
-            'currentMembers': FieldValue.increment(1),
-          });
     } catch (e, stackTrace) {
       debugPrint('❌ 参加人数更新エラー: $e');
       debugPrint('$stackTrace');
@@ -639,7 +822,7 @@ final isOwnProject = project.ownerId == user?.uid;
   await Navigator.push(
     context,
     MaterialPageRoute(
-      builder: (_) => TaskPage(
+    builder: (_) => TaskPage(
         projectTitle: project.title,
         ownerInfo: project.ownerInfo,
         isOwnProject: isOwnProject,
@@ -661,19 +844,17 @@ final isOwnProject = project.ownerId == user?.uid;
 class _InfoCard extends StatelessWidget {
   final String title;
   final Widget child;
-  final EdgeInsetsGeometry padding;
 
   const _InfoCard({
     required this.title,
     required this.child,
-    this.padding = const EdgeInsets.all(16),
   });
 
   @override
   Widget build(BuildContext context) {
     return Container(
       width: double.infinity,
-      padding: padding,
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(12),
         color: Colors.white.withValues(alpha: 0.03),
@@ -769,11 +950,13 @@ class _ProjectCard extends StatelessWidget {
   final ProjectInfo project;
   final Color accent;
   final VoidCallback onJoinPressed;
+  final VoidCallback? onDeletePressed;
 
   const _ProjectCard({
     required this.project,
     required this.accent,
     required this.onJoinPressed,
+    this.onDeletePressed,
   });
 
   @override
@@ -945,12 +1128,25 @@ class _ProjectCard extends StatelessWidget {
   Widget _buildMenuButton() {
     return PopupMenuButton<String>(
       icon: const Icon(Icons.more_vert, color: Colors.white54, size: 20),
-      onSelected: (value) => debugPrint('カードメニュー選択: $value'),
-      itemBuilder: (context) => const [
-        PopupMenuItem(value: 'share', child: Text('共有')),
-        PopupMenuItem(value: 'save', child: Text('保存')),
-        PopupMenuItem(value: 'report', child: Text('通報')),
-      ],
+      onSelected: (value) {
+        if (value == 'delete') {
+          onDeletePressed?.call();
+          return;
+        }
+        debugPrint('カードメニュー選択: $value');
+      },
+      itemBuilder: (context) {
+        final user = FirebaseAuth.instance.currentUser;
+        final isOwnProject = user != null && project.ownerId == user.uid;
+
+        return [
+          if (isOwnProject)
+            const PopupMenuItem(value: 'delete', child: Text('削除')),
+          const PopupMenuItem(value: 'share', child: Text('共有')),
+          const PopupMenuItem(value: 'save', child: Text('保存')),
+          const PopupMenuItem(value: 'report', child: Text('通報')),
+        ];
+      },
     );
   }
 }
@@ -1003,6 +1199,10 @@ class _ProjectList extends StatelessWidget {
           project: project,
           accent: accent,
           onJoinPressed: () => _handleJoinPressed(
+            context,
+            project: project,
+          ),
+          onDeletePressed: () => _handleDeleteProject(
             context,
             project: project,
           ),
@@ -1640,123 +1840,377 @@ class _HeroIllustrationBackground extends StatelessWidget {
 // ウィジェット：右サイドバー
 // ============================================================
 
-class _CategoryChip extends StatelessWidget {
-  final String label;
-  const _CategoryChip(this.label);
+class _RepoSwitchSidebar extends StatefulWidget {
+  const _RepoSwitchSidebar();
 
   @override
-  Widget build(BuildContext context) {
-    return Chip(
-      label: Text(label),
-      backgroundColor: Colors.transparent,
-      side: const BorderSide(color: Colors.white24),
-      labelStyle: const TextStyle(color: Colors.white),
-    );
-  }
+  State<_RepoSwitchSidebar> createState() => _RepoSwitchSidebarState();
 }
 
-class _RecentPostTile extends StatelessWidget {
-  final String title;
-  final String timeAgo;
-  const _RecentPostTile({required this.title, required this.timeAgo});
+class _RepoSwitchSidebarState extends State<_RepoSwitchSidebar> {
+  final TextEditingController _searchController = TextEditingController();
+  final ScrollController _scrollController = ScrollController();
+  List<Map<String, dynamic>> _repositories = [];
+  Map<String, dynamic>? _selectedRepo;
+  bool _isLoading = true;
+  String? _errorMessage;
 
   @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      title: Text(
-        title,
-        style: const TextStyle(color: Colors.white, fontSize: 14),
-      ),
-      subtitle: Text(
-        timeAgo,
-        style: const TextStyle(color: Colors.white54, fontSize: 12),
-      ),
-    );
+  void initState() {
+    super.initState();
+    _selectedRepo = GitHubSession.selectedRepo;
+    _loadRepositories();
   }
-}
-
-/// 元コードでは同じ構造のListTileが4個ベタ書きされていたため共通化した
-class _ActivityTile extends StatelessWidget {
-  final String text;
-  final String timeAgo;
-  const _ActivityTile({required this.text, required this.timeAgo});
 
   @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6),
-      child: ListTile(
-        contentPadding: EdgeInsets.zero,
-        leading: const Icon(Icons.flash_on, color: Color(0xFF6C5CE7)),
-        title: Text(text, style: const TextStyle(color: Colors.white)),
-        subtitle: Text(timeAgo, style: const TextStyle(color: Colors.white54)),
-      ),
-    );
+  void dispose() {
+    _searchController.dispose();
+    _scrollController.dispose();
+    super.dispose();
   }
-}
 
-/// 画面右側のサイドバー（おすすめカテゴリ・トレンドタグ・最近の投稿・アクティビティ）
-class _HomeSidebarRight extends StatelessWidget {
-  const _HomeSidebarRight();
+  Future<void> _loadRepositories() async {
+    if (GitHubSession.repositories.isNotEmpty) {
+      final cached = GitHubSession.repositories;
+      final resolvedSelected = _resolveSelectedRepository(cached);
+      if (!mounted) return;
+      setState(() {
+        _repositories = cached;
+        _selectedRepo = resolvedSelected;
+        _isLoading = false;
+        _errorMessage = null;
+      });
+      return;
+    }
+
+    final token = GitHubSession.accessToken;
+    if (token == null) {
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'GitHubログイン後にリポジトリ一覧が表示されます';
+      });
+      return;
+    }
+
+    try {
+      final repositories = await GitHubApi.getRepositories(token: token);
+      final repoList = repositories
+          .whereType<Map>()
+          .map((repo) => Map<String, dynamic>.from(repo))
+          .toList();
+      GitHubSession.repositories = repoList;
+      final resolvedSelected = _resolveSelectedRepository(repoList);
+      GitHubSession.selectedRepo = resolvedSelected;
+
+      if (!mounted) return;
+      setState(() {
+        _repositories = repoList;
+        _selectedRepo = resolvedSelected;
+        _isLoading = false;
+        _errorMessage = repoList.isEmpty ? 'リポジトリが見つかりません' : null;
+      });
+    } catch (e) {
+      debugPrint('リポジトリ一覧の取得に失敗しました: $e');
+      if (!mounted) return;
+      setState(() {
+        _isLoading = false;
+        _errorMessage = 'リポジトリ一覧の取得に失敗しました';
+      });
+    }
+  }
+
+  Map<String, dynamic>? _resolveSelectedRepository(
+    List<Map<String, dynamic>> repoList,
+  ) {
+    final currentSelected = GitHubSession.selectedRepo;
+    if (currentSelected != null) {
+      final selectedFullName = currentSelected['full_name'] as String?;
+      final selectedExists = repoList.any(
+        (repo) => repo['full_name'] == selectedFullName,
+      );
+      if (selectedExists) {
+        return currentSelected;
+      }
+    }
+
+    return repoList.isNotEmpty ? repoList.first : null;
+  }
+
+  void _selectRepository(Map<String, dynamic> repo) {
+    setState(() {
+      _selectedRepo = repo;
+    });
+    GitHubSession.selectedRepo = repo;
+    debugPrint('GitHub selected repo changed: ${repo['full_name']}');
+  }
+
+  List<Map<String, dynamic>> get _filteredRepositories {
+    final query = _searchController.text.trim().toLowerCase();
+    if (query.isEmpty) return _repositories;
+
+    return _repositories.where((repo) {
+      final fullName = (repo['full_name'] as String? ?? '').toLowerCase();
+      final name = (repo['name'] as String? ?? '').toLowerCase();
+      final description = (repo['description'] as String? ?? '').toLowerCase();
+      final language = (repo['language'] as String? ?? '').toLowerCase();
+      return fullName.contains(query) ||
+          name.contains(query) ||
+          description.contains(query) ||
+          language.contains(query);
+    }).toList();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final sidebarWidth = MediaQuery.of(context).size.width * 0.24;
+    final selectedRepo = _selectedRepo;
+    final filteredRepos = _filteredRepositories;
+    final selectedFullName = selectedRepo?['full_name'] as String?;
+
     return Container(
-      width: MediaQuery.of(context).size.width * 0.2,
+      width: sidebarWidth.clamp(300.0, 380.0).toDouble(),
       color: AppColors.backgroundBase,
       padding: const EdgeInsets.only(top: 20, left: 16, right: 16, bottom: 16),
       child: SingleChildScrollView(
+        controller: _scrollController,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            _InfoCard(
-              padding: const EdgeInsets.all(30),
-              title: 'おすすめカテゴリ',
-              child: const Wrap(
-                spacing: 8,
-                runSpacing: 8,
-                children: [
-                  _CategoryChip('Flutter'),
-                  _CategoryChip('Web'),
-                  _CategoryChip('AI'),
-                  _CategoryChip('Unity'),
-                ],
+            const _InfoCard(
+              title: 'GitHub リポジトリ',
+              child: Text(
+                'ここで選んだリポジトリが、タスク画面や関連情報の基準になります。',
+                style: TextStyle(
+                  color: Colors.white70,
+                  height: 1.6,
+                  fontSize: 13,
+                ),
               ),
             ),
             const SizedBox(height: 16),
-            const _InfoCard(
-              title: 'トレンドタグ',
-              child: Text(
-                '#Flutter\n#個人開発\n#AI\n#Python',
-                style: TextStyle(
-                  color: Colors.white70,
-                  height: 1.8,
-                  fontSize: 14,
+            Container(
+              height: 46,
+              decoration: BoxDecoration(
+                color: const Color(0xff0a1220),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+              ),
+              child: TextField(
+                controller: _searchController,
+                onChanged: (_) => setState(() {}),
+                style: const TextStyle(color: Colors.white, fontSize: 14),
+                decoration: InputDecoration(
+                  border: InputBorder.none,
+                  prefixIcon:
+                      const Icon(Icons.search, color: Colors.white54, size: 20),
+                  suffixIcon: _searchController.text.isEmpty
+                      ? null
+                      : IconButton(
+                          icon: const Icon(Icons.close, color: Colors.white54),
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() {});
+                          },
+                        ),
+                  hintText: '検索...',
+                  hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.4)),
+                  contentPadding: const EdgeInsets.symmetric(vertical: 14),
                 ),
               ),
             ),
-            const SizedBox(height: 20),
-            const _InfoCard(
-              title: '最近の投稿',
-              child: Column(
-                children: [
-                  _RecentPostTile(title: 'Flutter仲間募集', timeAgo: '3分前'),
-                  _RecentPostTile(title: 'AIアプリ開発中', timeAgo: '12分前'),
-                ],
-              ),
-            ),
-            const SizedBox(height: 25),
+            const SizedBox(height: 16),
             _InfoCard(
-              title: 'リアルタイムアクティビティ',
-              child: Column(
-                children: List.generate(
-                  4,
-                  (_) => const _ActivityTile(
-                    text: 'Flutter開発者が参加しました',
-                    timeAgo: '2分前',
-                  ),
-                ),
+              title: '現在の選択',
+              child: selectedRepo == null
+                  ? Text(
+                      _isLoading
+                          ? '読み込み中...'
+                          : _errorMessage ?? '選択中のリポジトリはありません',
+                      style: const TextStyle(
+                        color: Colors.white70,
+                        height: 1.5,
+                      ),
+                    )
+                  : Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          selectedRepo['name'] as String? ?? '-',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(
+                          selectedRepo['full_name'] as String? ?? '',
+                          style: TextStyle(
+                            color: Colors.white.withValues(alpha: 0.72),
+                            fontSize: 13,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          selectedRepo['description'] as String? ??
+                              '説明はまだ設定されていません',
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            height: 1.5,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
+            const SizedBox(height: 16),
+            _InfoCard(
+              title: '切り替え可能なリポジトリ',
+              child: SizedBox(
+                height: 420,
+                child: _isLoading
+                    ? const Center(
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2.2,
+                          color: Color(0xff8F7CFF),
+                        ),
+                      )
+                    : _errorMessage != null && _repositories.isEmpty
+                        ? Center(
+                            child: Text(
+                              _errorMessage!,
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                height: 1.5,
+                                fontSize: 13,
+                              ),
+                            ),
+                          )
+                        : filteredRepos.isEmpty
+                            ? const Center(
+                                child: Text(
+                                  '条件に合うリポジトリがありません',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(
+                                    color: Colors.white70,
+                                    height: 1.5,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              )
+                            : ListView.separated(
+                                itemCount: filteredRepos.length,
+                                separatorBuilder: (_, _) =>
+                                    const SizedBox(height: 10),
+                                itemBuilder: (context, index) {
+                                  final repo = filteredRepos[index];
+                                  final isSelected =
+                                      repo['full_name'] == selectedFullName;
+                                  return InkWell(
+                                    borderRadius: BorderRadius.circular(12),
+                                    onTap: () => _selectRepository(repo),
+                                    child: AnimatedContainer(
+                                      duration:
+                                          const Duration(milliseconds: 180),
+                                      padding: const EdgeInsets.all(12),
+                                      decoration: BoxDecoration(
+                                        color: isSelected
+                                            ? const Color(0xff1a2140)
+                                            : Colors.white.withValues(
+                                                alpha: 0.03,
+                                              ),
+                                        borderRadius: BorderRadius.circular(12),
+                                        border: Border.all(
+                                          color: isSelected
+                                              ? const Color(0xff8F7CFF)
+                                                  .withValues(alpha: 0.45)
+                                              : Colors.white.withValues(
+                                                  alpha: 0.08,
+                                                ),
+                                        ),
+                                      ),
+                                      child: Row(
+                                        children: [
+                                          Container(
+                                            width: 40,
+                                            height: 40,
+                                            decoration: BoxDecoration(
+                                              borderRadius:
+                                                  BorderRadius.circular(10),
+                                              gradient: LinearGradient(
+                                                colors: [
+                                                  const Color(0xff7c5cff)
+                                                      .withValues(alpha: 0.22),
+                                                  const Color(0xff5c6bc0)
+                                                      .withValues(alpha: 0.14),
+                                                ],
+                                              ),
+                                            ),
+                                            child: const Icon(
+                                              Icons.folder_rounded,
+                                              color: Color(0xffC8B9FF),
+                                              size: 22,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 12),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment:
+                                                  CrossAxisAlignment.start,
+                                              children: [
+                                                Text(
+                                                  repo['name'] as String? ??
+                                                      '-',
+                                                  style: const TextStyle(
+                                                    color: Colors.white,
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.w700,
+                                                  ),
+                                                ),
+                                                const SizedBox(height: 3),
+                                                Text(
+                                                  repo['full_name'] as String? ??
+                                                      '',
+                                                  style: TextStyle(
+                                                    color: Colors.white
+                                                        .withValues(
+                                                      alpha: 0.55,
+                                                    ),
+                                                    fontSize: 12,
+                                                  ),
+                                                ),
+                                                if ((repo['language']
+                                                            as String? ??
+                                                        '')
+                                                    .isNotEmpty) ...[
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    repo['language'] as String,
+                                                    style: const TextStyle(
+                                                      color: Color(0xff8F7CFF),
+                                                      fontSize: 11,
+                                                      fontWeight:
+                                                          FontWeight.w600,
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
+                                            ),
+                                          ),
+                                          if (isSelected)
+                                            const Icon(
+                                              Icons.check_circle_rounded,
+                                              color: Color(0xff8F7CFF),
+                                              size: 18,
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  );
+                                },
+                              ),
               ),
             ),
           ],
@@ -1845,7 +2299,7 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
               ),
             ),
           ),
-          const _HomeSidebarRight(),
+          const _RepoSwitchSidebar(),
         ],
       ),
     );
