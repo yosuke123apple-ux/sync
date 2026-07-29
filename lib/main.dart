@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'firebase_options.dart';
 import 'post_page.dart';
 import 'task_page.dart';
@@ -12,6 +13,9 @@ import 'dart:async'; // ★これを追加します！
 //githubログイン実装コードここから
 import 'github_api.dart';
 import 'dart:ui';
+import 'SeriousModePage.dart';
+
+
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
@@ -22,7 +26,7 @@ class LoginPage extends StatefulWidget {
 class _LoginPageState extends State<LoginPage> {
   bool _isSigningIn = false;
   StreamSubscription<User?>? _authSub;
-
+//StreamSubscriptionとは;ostem()でデータを受け取りしたときに操作ができる
   Future<void> _login(BuildContext context) async {
     if (_isSigningIn) return;
 
@@ -34,7 +38,7 @@ class _LoginPageState extends State<LoginPage> {
       // ウェブアプリかスマホアプリかで自動で切り替える
       UserCredential userCredential;
 
-      if (kIsWeb) {
+      if (kIsWeb) {//KIsWeb=スマホかウェブ
         userCredential = await FirebaseAuth.instance.signInWithPopup(
           GithubAuthProvider(),
         );
@@ -44,11 +48,12 @@ class _LoginPageState extends State<LoginPage> {
         );
       }
 
-      final githubCredential =//credential=googleからの認証をgithubの形に翻訳
+      final githubCredential =//credential=googleの情報をgithubの認証情報とする
           userCredential.credential as OAuthCredential?;
 //githubのアクセストークンをgithubsessionに保存する
       GitHubSession.accessToken = githubCredential?.accessToken;
-
+      await GitHubSession.saveToPrefs();
+//savaToPrefs小さい情報をオゾンするもの
       debugPrint('GitHub Token: ${GitHubSession.accessToken}');
       final user = FirebaseAuth.instance.currentUser;
 
@@ -58,21 +63,22 @@ class _LoginPageState extends State<LoginPage> {
 
       final token = GitHubSession.accessToken;
       if (token != null) {
-        try {
+        try {//次回ここから
           GitHubSession.currentUser = await GitHubApi.getCurrentUser(
             token: token,
           );
           final repositories = await GitHubApi.getRepositories(token: token);
           GitHubSession.repositories = repositories
-              .whereType<Map>()
-              .map((repo) => Map<String, dynamic>.from(repo))
-              .toList();
+              .whereType<Map>()//map型のデータを残す
+              .map((repo) => Map<String, dynamic>.from(repo))//map(string,dynamic)の形にする扱いやすい
+              .toList();  //リスト化する
           if (repositories.isNotEmpty) {
             GitHubSession.selectedRepo =
                 repositories.first as Map<String, dynamic>;
           } else {
             GitHubSession.selectedRepo = null;
           }
+          await GitHubSession.saveToPrefs();
           debugPrint('GitHub current user: ${GitHubSession.currentLogin}');
           debugPrint(
             'GitHub selected repo: ${GitHubSession.selectedRepo?['full_name']}',
@@ -140,27 +146,46 @@ class _LoginPageState extends State<LoginPage> {
 
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final buttonSize = screenWidth >= 600 ? 96.0 : 72.0;
+
+
 
     return Scaffold(
       backgroundColor: const Color(0xFF060A18),
       body: Center(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
+          child: SingleChildScrollView(
+        child: Container(
+          width: 500, // お好みの幅に調整してください
+          height: 500,
+    // 内側の余白（枠線とテキスト・アイコンの間の隙間）
+    padding: const EdgeInsets.symmetric(vertical: 32.0, horizontal: 24.0),
+    
+    // 枠線とデザインの設定
+    decoration: BoxDecoration(
+      color: const Color(0xFF060A18), // 背景色（画像のダークカラーに合わせる場合）
+      border: Border.all(
+        color: Colors.white24, // 枠線の色（少し透過させた白など）
+        width: 1.5,            // 枠線の太さ
+      ),
+      borderRadius: BorderRadius.circular(16.0), // 角を丸くする
+    ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              FaIcon(
+  FontAwesomeIcons.github,
+  size: 45,
+),
+SizedBox(height:  10),
               const Text(
                 'GitHubでログイン',
                 style: TextStyle(
-                  fontSize: 20,
+                  fontSize: 30,
                   fontWeight: FontWeight.w700,
                   color: Colors.white,
-                  letterSpacing: 0.3,
+              
                 ),
               ),
-              const SizedBox(height: 18),
+              const SizedBox(height: 6),
               Text(
                 '続けるには GitHub アカウントでログインしてください',
                 textAlign: TextAlign.center,
@@ -170,54 +195,281 @@ class _LoginPageState extends State<LoginPage> {
                   height: 1.5,
                 ),
               ),
+              Row(
+  children: const [
+    // 左側の線
+    Expanded(
+      child: Divider(
+        color: Colors.grey, // 線の色
+        thickness: 1,       // 線の太さ
+      ),
+    ),
+    
+    // 中央のアイコン（左右に余白を調整）
+    Padding(
+      padding: EdgeInsets.symmetric(horizontal: 12.0),
+      child: Icon(
+        Icons.verified_user_outlined, // 類似のシールドアイコン
+        color: Colors.grey,           // アイコンの色
+        size: 20,                      // アイコンのサイズ
+      ),
+    ),
+    
+    // 右側の線
+    Expanded(
+      child: Divider(
+        color: Colors.grey, // 線の色
+        thickness: 1,       // 線の太さ
+      ),
+    ),
+  ],
+),
               const SizedBox(height: 28),
-              Material(
-                color: Colors.transparent,
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(22),
-                  onTap: _isSigningIn ? null : () => _login(context),
-                  child: Container(
-                    width: buttonSize,
-                    height: buttonSize,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF24292F).withValues(alpha: 0.98),
-                      borderRadius: BorderRadius.circular(22),
-                      border: Border.all(
-                        color: const Color(0xFF6E7781).withValues(alpha: 0.35),
-                        width: 1.2,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: const Color(0xFF24292F).withValues(alpha: 0.28),
-                          blurRadius: 18,
-                          spreadRadius: 1,
-                          offset: const Offset(0, 10),
-                        ),
-                      ],
-                    ),
-                    child: Center(//ロード中のくるくるアイコン
-                      child: _isSigningIn
-                          ? const SizedBox(
-                              width: 24,
-                              height: 24,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2.2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : const Icon(
-                              Icons.login_rounded,
-                              size: 34,
-                              color: Colors.white,
-                            ),
-                    ),
-                  ),
+            Material(
+  // 1. 波紋エフェクトなどのための親Materialの色を透明（または白）に
+  color: Colors.transparent, 
+  child: InkWell(
+    // InkWellの角丸もContainerの22に合わせるとタップ時のエフェクトがはみ出ません
+    borderRadius: BorderRadius.circular(22),
+    onTap: _isSigningIn ? null : () => _login(context),
+    child: Container(
+      width: 400,
+      height: 71,
+      decoration: BoxDecoration(
+        // 2. カードの背景色を「白」に変更
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(
+          // 3. 白背景に合わせて枠線の色を薄いグレーに調整
+          color: const Color(0xFF6E7781).withValues(alpha: 0.2),
+          width: 1.2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            // 4. 影の色も自然な明るい黒（透過）に調整
+            color: Colors.black.withValues(alpha: 0.08),
+            blurRadius: 18,
+            spreadRadius: 1,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Center(
+        child: _isSigningIn
+            ? const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.2,
+                  // 5. くるくるアイコンを白から暗めの色（黒）に変更
+                  color: Color(0xFF24292F),
                 ),
-              ),
-            ],
+              )
+          : Padding(
+    padding: const EdgeInsets.symmetric(
+      horizontal: 24.0, // 左右の余白（画像に合わせて少し外側に広げています）
+      vertical: 12.0,
+    ),
+    child: Row(
+      children: const [
+        // 1. GitHubアイコン
+        FaIcon(
+          FontAwesomeIcons.github,
+          size: 28,
+          color: Color(0xFF24292F),
+        ),
+        SizedBox(width: 14), // アイコンとテキストの間隔
+        
+        // 2. テキスト（GitHubの「H」は本来大文字）
+        Text(
+          'GitHubでログイン',
+          style: TextStyle(
+            color: Color(0xFF24292F),
+            fontSize: 17,
+            fontWeight: FontWeight.w700, // 少し太めの読みやすい太さ
           ),
         ),
+        
+        // 3. 右端に押し出す余白
+        Spacer(),
+        
+        // 4. 右側のまっすぐな矢印アイコン（画像と同じ見た目）
+        Icon(
+          Icons.arrow_forward,
+          size: 20,
+          color: Color(0xFF57606A), // 画像に合わせて少し淡いダークグレー
+        ),
+      ],
+    ),
+  )
       ),
+    ),
+  ),
+),
+SizedBox(height: 30),
+Text('ログインすると、プロフィール情報の共有に同意したことになります',
+style: TextStyle(
+  fontSize: 11,
+  color: Colors.grey,
+)
+),
+SizedBox(height: 50),
+
+    // --------------------------------------------------
+    // 1. 上部の区切り線（盾アイコン付き）
+    // --------------------------------------------------
+
+
+    // --------------------------------------------------
+    // 2. 3つの特徴エリア（横並び）
+    // --------------------------------------------------
+    IntrinsicHeight(
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          // ================= 特徴 1 =================
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Icon(
+                  Icons.verified_user_outlined,
+                  color: Colors.white,
+                  size: 28,
+                ),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        '安全・安心',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        'GitHubの認証で\n安全にログイン',
+                        style: TextStyle(
+                          color: Colors.white60,
+                          fontSize: 12,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // 縦の区切り線 1
+          const VerticalDivider(
+            color: Colors.white24,
+            thickness: 1,
+            width: 24,
+          ),
+
+          // ================= 特徴 2 =================
+          Expanded(
+            child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Icon(
+                  Icons.person_outline,
+                  color: Colors.white,
+                  size: 28,
+                ),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'スピーディー',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        'githubにログインするだけ',
+                        style: TextStyle(
+                          color: Colors.white60,
+                          fontSize: 12,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // 縦の区切り線 2
+          const VerticalDivider(
+            color: Colors.white24,
+            thickness: 1,
+            width: 24,
+          ),
+
+          // ================= 特徴 3 =================
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: const [
+                Icon(
+                  Icons.sync,
+                  color: Colors.white,
+                  size: 28,
+                ),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'データ連携',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        'GitHubの情報と\n自動で連携',
+                        style: TextStyle(
+                          color: Colors.white60,
+                          fontSize: 12,
+                          height: 1.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    ),
+  ],
+)
+            
+          
+        ),
+      ),
+      )
     );
   }
 }
@@ -228,6 +480,7 @@ class _LoginPageState extends State<LoginPage> {
 Future<void> main() async {// Flutterの初期化とFirebaseの初期化を行う
   WidgetsFlutterBinding.ensureInitialized();
   await _initializeFirebase();
+  await GitHubSession.restoreFromPrefs();
   runApp(const SyncApp());
 }
 
@@ -357,6 +610,7 @@ class AuthGate extends StatelessWidget {
         debugPrint('✅ ログイン成功: ${user.email}');
         debugPrint('   UID: ${user.uid}');
         return const HomePage();
+        
       },
     );
   }
@@ -824,6 +1078,7 @@ debugPrint('hello world');
     MaterialPageRoute(
     builder: (_) => TaskPage(
         projectTitle: project.title,
+        projectdescription: project.description,
         ownerInfo: project.ownerInfo,
         isOwnProject: isOwnProject,
         projectId: project.id,
@@ -1028,6 +1283,7 @@ class _ProjectCard extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(
               child: Text(
@@ -1064,15 +1320,51 @@ class _ProjectCard extends StatelessWidget {
           project.description,
           style: const TextStyle(color: Colors.white70, fontSize: 14),
         ),
+        // _buildContent() の中の該当箇所を置き換え
         const SizedBox(height: 10),
-        Row(
-          children: [
-            Expanded(child: _buildTags()),
-            _buildMemberCount(),
-            const SizedBox(width: 10),
-            _JoinButton(onPressed: onJoinPressed),
-          ],
-        ),
+
+Row(
+  crossAxisAlignment: CrossAxisAlignment.start,
+  children: [
+    Expanded(
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: project.tags
+            .map(
+              (tag) => Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: Colors.black26,
+                  borderRadius: BorderRadius.circular(999),
+                  border: Border.all(color: Colors.white10),
+                ),
+                child: Text(
+                  tag,
+                  style: const TextStyle(
+                    color: Colors.white70,
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            )
+            .toList(),
+      ),
+    ),
+
+    const SizedBox(width: 12),
+
+    _buildMemberCount(),
+
+    const SizedBox(width: 10),
+
+    _JoinButton(onPressed: onJoinPressed),
+  ],
+),
       ],
     );
   }
@@ -1142,9 +1434,7 @@ class _ProjectCard extends StatelessWidget {
         return [
           if (isOwnProject)
             const PopupMenuItem(value: 'delete', child: Text('削除')),
-          const PopupMenuItem(value: 'share', child: Text('共有')),
-          const PopupMenuItem(value: 'save', child: Text('保存')),
-          const PopupMenuItem(value: 'report', child: Text('通報')),
+
         ];
       },
     );
@@ -1152,8 +1442,13 @@ class _ProjectCard extends StatelessWidget {
 }
 
 /// 募集一覧（Firestoreから取得。エラー/未取得時はモックデータにフォールバック）
-class _ProjectList extends StatelessWidget {
-  const _ProjectList();
+class ProjectList extends StatelessWidget {
+    final String? roleFilter;
+
+  const ProjectList({
+      super.key,
+    this.roleFilter,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1164,8 +1459,13 @@ class _ProjectList extends StatelessWidget {
           debugPrint('❌ Firestore読み込みエラー: ${snapshot.error}');
         
         }
+        var projects = snapshot.data ?? [];
 
-        final projects = snapshot.data;
+if (roleFilter != null) {
+  projects = projects
+      .where((project) => project.role == roleFilter)
+      .toList();
+}
         if (projects == null) {
           return const Center(
             child: CircularProgressIndicator(),
@@ -1550,12 +1850,19 @@ class _HomeSidebarLeft extends StatelessWidget {
 /// 検索バーの幅は固定値ではなく、Expanded + ConstrainedBoxで
 /// 画面幅に応じて伸縮するようにしている。
 class _SearchAndPostBar extends StatelessWidget {
-  const _SearchAndPostBar();
+  final VoidCallback? onMenuTap; // ★追加
+
+  const _SearchAndPostBar({this.onMenuTap});
 
   @override
   Widget build(BuildContext context) {
     return Row(
       children: [
+        if (onMenuTap != null) // ★狭い画面だけメニューボタンを表示
+          IconButton(
+            icon: const Icon(Icons.menu, color: Colors.white),
+            onPressed: onMenuTap,
+          ),
         Expanded(
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 1000),
@@ -1572,6 +1879,8 @@ class _SearchAndPostBar extends StatelessWidget {
       ],
     );
   }
+  // _buildSearchField / _buildPostButton はそのまま
+
 
   Widget _buildSearchField() {
     return Container(
@@ -1675,166 +1984,8 @@ class _HeroStat extends StatelessWidget {
   }
 }
 
-/// トップページ上部の「Collaboration Space」バナー
-class _HeroBanner extends StatelessWidget {
-  const _HeroBanner();
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 229,
-      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(24),
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xff17103a), Color(0xff0d1028)],
-        ),
-        border: Border.all(color: Colors.white10),
-      ),
-      child: Row(
-        children: [
-          Expanded(child: _buildTextSection()),
-          const SizedBox(
-            width: 320,
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                _HeroIllustrationBackground(),
-                Icon(Icons.code_rounded, size: 90, color: Color(0xff7c5cff)),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
 
-  Widget _buildTextSection() {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-          decoration: BoxDecoration(
-            color: const Color(0xff7c5cff).withValues(alpha: 0.12),
-            borderRadius: BorderRadius.circular(999),
-            border: Border.all(
-              color: const Color(0xff7c5cff).withValues(alpha: 0.25),
-            ),
-          ),
-          child: const Text(
-            'Collaboration Space',
-            style: TextStyle(
-              color: Color(0xffB9B3FF),
-              fontSize: 12,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 1.1,
-            ),
-          ),
-        ),
-        const SizedBox(height: 10),
-        SizedBox(
-          width: double.infinity,
-          child: FittedBox(
-            fit: BoxFit.scaleDown,
-            alignment: Alignment.centerLeft,
-            child: Text.rich(
-              const TextSpan(
-                style: TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.w900,
-                  height: 1.0,
-                  letterSpacing: -1.0,
-                  shadows: [
-                    Shadow(
-                      color: Color(0x44000000),
-                      blurRadius: 16,
-                      offset: Offset(0, 4),
-                    ),
-                  ],
-                ),
-                children: [
-                  TextSpan(
-                    text: '一緒に、',
-                    style: TextStyle(color: Color(0xFFF8FAFF)),
-                  ),
-                  TextSpan(
-                    text: 'アイデアをカタチにしよう。',
-                    style: TextStyle(color: Color(0xff8F7CFF)),
-                  ),
-                ],
-              ),
-              maxLines: 1,
-              softWrap: false,
-            ),
-          ),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          '少人数で、本気で、最高のプロダクトを。',
-          style: TextStyle(
-            fontSize: 14,
-            color: Colors.white.withValues(alpha: 0.72),
-            height: 1.35,
-            fontWeight: FontWeight.w500,
-          ),
-        ),
-        const SizedBox(height: 14),
-        const SizedBox(
-          height: 60,
-          child: Row(
-            children: [
-              Expanded(
-                child: _HeroStat(
-                  icon: Icons.schedule_outlined,
-                  color: Color(0xFF7C5CFF),
-                  value: '100時間',
-                  label: '今週の総作業時間',
-                ),
-              ),
-              SizedBox(width: 16),
-              Expanded(
-                child: _HeroStat(
-                  icon: Icons.trending_up_outlined,
-                  color: Color(0xFF3B82F6),
-                  value: '92%',
-                  label: 'また組みたい率',
-                ),
-              ),
-              SizedBox(width: 16),
-              Expanded(
-                child: _HeroStat(
-                  icon: Icons.folder_open_outlined,
-                  color: Color(0xFFEC4899),
-                  value: '3件',
-                  label: '応募中のプロジェクト',
-                ),
-              ),
-            ],
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _HeroIllustrationBackground extends StatelessWidget {
-  const _HeroIllustrationBackground();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 220,
-      height: 220,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: const Color(0xff7c5cff).withValues(alpha: 0.08),
-      ),
-    );
-  }
-}
 
 // ============================================================
 // ウィジェット：右サイドバー
@@ -1902,6 +2053,7 @@ class _RepoSwitchSidebarState extends State<_RepoSwitchSidebar> {
       GitHubSession.repositories = repoList;
       final resolvedSelected = _resolveSelectedRepository(repoList);
       GitHubSession.selectedRepo = resolvedSelected;
+      await GitHubSession.saveToPrefs();
 
       if (!mounted) return;
       setState(() {
@@ -1937,11 +2089,12 @@ class _RepoSwitchSidebarState extends State<_RepoSwitchSidebar> {
     return repoList.isNotEmpty ? repoList.first : null;
   }
 
-  void _selectRepository(Map<String, dynamic> repo) {
+  Future<void> _selectRepository(Map<String, dynamic> repo) async {
     setState(() {
       _selectedRepo = repo;
     });
     GitHubSession.selectedRepo = repo;
+    await GitHubSession.saveToPrefs();
     debugPrint('GitHub selected repo changed: ${repo['full_name']}');
   }
 
@@ -2224,6 +2377,7 @@ class _RepoSwitchSidebarState extends State<_RepoSwitchSidebar> {
 // ホーム画面（全体のレイアウト組み立て）
 // ============================================================
 
+
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
 
@@ -2233,7 +2387,8 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
   int _selectedMenuIndex = 0;
-
+ 
+  final _scaffoldKey = GlobalKey<ScaffoldState>();
   @override
   void initState() {
     super.initState();
@@ -2263,45 +2418,77 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return;
   }
 
-  @override
+
+Widget _buildBody() {
+  switch (_selectedMenuIndex) {
+    case 0:
+      return const ProjectList();
+
+    case 1:
+      return const SeriousModePage();
+
+    default:
+      return const ProjectList();
+  }
+}
+
+ @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppColors.mainBackground,
-      body: Row(
-        children: [
-          _HomeSidebarLeft(
-            menuItems: _menuItems,
-            selectedIndex: _selectedMenuIndex,
-            onMenuSelected: (index) =>
-                setState(() => _selectedMenuIndex = index),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        final showLeftSidebar = width >= 760;   // これ未満はDrawerへ
+        final showRightSidebar = width >= 1100; // これ未満は非表示
+
+        final leftSidebar = _HomeSidebarLeft(
+          menuItems: _menuItems,
+          selectedIndex: _selectedMenuIndex,
+          onMenuSelected: (index) {
+            setState(() => _selectedMenuIndex = index);
+            if (!showLeftSidebar) Navigator.of(context).maybePop(); // Drawerを閉じる
+          },
+        );
+
+        return Scaffold(
+          key: _scaffoldKey,
+          backgroundColor: AppColors.mainBackground,
+          drawer: showLeftSidebar ? null : Drawer(child: leftSidebar),
+          body: Row(
+            children: [
+              if (showLeftSidebar) leftSidebar,
+      Expanded(
+  child: Container(
+    color: AppColors.contentBackground,
+    padding: const EdgeInsets.all(24),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _SearchAndPostBar(
+          onMenuTap: showLeftSidebar
+              ? null
+              : () => _scaffoldKey.currentState?.openDrawer(),
+        ),
+        const SizedBox(height: 24),
+        ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 1250),
+    
+        ),
+        const SizedBox(height: 25),
+        Expanded(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 1250),
+            child:  _buildBody(), // ←ここ
           ),
-          Expanded(
-            child: Container(
-              color: AppColors.contentBackground,
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const _SearchAndPostBar(),
-                  const SizedBox(height: 24),
-                  ConstrainedBox(
-                    constraints: BoxConstraints(maxWidth: 1250),
-                    child: const _HeroBanner(),
-                  ),
-                  const SizedBox(height: 25),
-                  Expanded(
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(maxWidth: 1250),
-                      child: const _ProjectList(),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+        ),
+      ],
+    ),
+  ),
+),
+              if (showRightSidebar) const _RepoSwitchSidebar(),
+            ],
           ),
-          const _RepoSwitchSidebar(),
-        ],
-      ),
+        );
+      },
     );
   }
 }

@@ -13,8 +13,7 @@ class GitHubApi {
       Uri.parse('$_baseUrl$path'),
       headers: {
         'Accept': 'application/vnd.github+json',
-        if (token != null)
-          'Authorization': 'Bearer $token',
+        if (token != null) 'Authorization': 'Bearer $token',
       },
     );
 
@@ -111,6 +110,34 @@ class GitHubApi {
     );
   }
 
+  // ブランチ一覧
+  static Future<List<dynamic>> getBranches({
+    required String owner,
+    required String repo,
+    String? token,
+  }) async {
+    return await _get(
+      '/repos/$owner/$repo/branches?per_page=100',
+      token: token,
+    );
+  }
+
+  // 最新コミット（1件）
+  static Future<Map<String, dynamic>> getLatestCommit({
+    required String owner,
+    required String repo,
+    String? token,
+  }) async {
+    final commits = await getCommits(
+      owner: owner,
+      repo: repo,
+      token: token,
+      perPage: 1,
+    );
+
+    return commits.first;
+  }
+
   // ログインユーザー情報
   static Future<Map<String, dynamic>> getCurrentUser({
     required String token,
@@ -120,4 +147,36 @@ class GitHubApi {
       token: token,
     );
   }
+  // ユーザーアクティビティ
+static Future<List<dynamic>> getActivities({
+  required String username,
+  String? token,
+}) async {
+  return await _get(
+    '/users/$username/events',
+    token: token,
+  );
+}
+
+
+// 自分のアクティビティ
+static Future<List<dynamic>> getMyActivities({
+  required String token,
+}) async {
+  return await _get(
+    '/user/events',
+    token: token,
+  );
+}
+
+// 指定ユーザーの公開アクティビティ
+static Future<List<dynamic>> getUserActivities({
+  required String username,
+  String? token,
+}) async {
+  return await _get(
+    '/users/$username/events',
+    token: token,
+  );
+}
 }

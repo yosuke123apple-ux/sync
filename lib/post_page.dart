@@ -799,7 +799,8 @@ class _PostPageState extends State<PostPage> {
       body: SafeArea(
         child: LayoutBuilder(
           builder: (context, constraints) {
-            final isWide = constraints.maxWidth >= 1100;
+
+              final showIntro = constraints.maxWidth >= 1400;
             return Stack(
               children: [
                 Padding(
@@ -811,22 +812,18 @@ class _PostPageState extends State<PostPage> {
                       child: SizedBox(
                         width: double.infinity,
                         height: constraints.maxHeight,
-                        child: isWide
-                            ? Row(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
-                                children: [
-                                  _buildIntroPanel(),
-                                  const SizedBox(width: 24),
-                                  Expanded(child: _buildFormPanel()),
-                                ],
-                              )
-                            : Column(
-                                children: [
-                                  _buildIntroPanel(),
-                                  const SizedBox(height: 20),
-                                  Expanded(child: _buildFormPanel()),
-                                ],
-                              ),
+                        child: showIntro
+    ? Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          _buildIntroPanel(),
+          const SizedBox(width: 24),
+          Expanded(
+            child: _buildFormPanel(),
+          ),
+        ],
+      )
+    : _buildFormPanel(),
                       ),
                     ),
                   ),

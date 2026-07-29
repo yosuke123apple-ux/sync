@@ -7,18 +7,25 @@ import 'package:flutter/services.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'github_api.dart';
 import 'github_session.dart';
+import 'package:url_launcher/url_launcher.dart';
 // ============================================================
 // カラーパレット
 // ============================================================
 class _AppColors {
-  static const background = Color(0xFF030303);
-  static const panel = Color(0xFF050B14);
+  // 純黒に近すぎると目が疲れやすく寂しい印象になるため、わずかに明度を持ち上げて
+  // カードとの境界を認識しやすくした（大幅な変更はせず、トーンの微調整のみ）
+  static const background = Color(0xFF0A0A0F);
+  static const panel = Color(0xFF0B1220);
   static const accentPurple = Color(0xFF7C5CFF);
   static const accentBlue = Color(0xFF3B82F6);
   static const accentPink = Color(0xFFEC4899);
   static const accentTeal = Color(0xFF14B8A6);
+  // ── 達成・成功を示すグリーン（マージ済み／解決済みなど、頑張りが報われた場面で使用） ──
+  static const accentGreen = Color(0xFF34D399);
+  // ── 注目・ハイライト用のアンバー（Star数など、テンションが上がる数値に使用） ──
+  static const accentAmber = Color(0xFFFBBF24);
   static const textPrimary = Colors.white;
-  static const textSecondary = Color(0xFF9CA3AF); // グレー系の補助テキスト
+  static const textSecondary = Color(0xFFAAB4C5); // 視認性を少し高めたグレー系の補助テキスト
 
   // ── 装飾用トークン（枠線・区切り線・影のトーンを統一するため追加） ──
   static const cardBorder = Color(0x14FFFFFF); // 白8%
@@ -362,6 +369,7 @@ class ServiceLocator {
 // ============================================================
 class TaskPage extends StatelessWidget {
   final String projectTitle;
+  final String projectdescription;
   final String ownerInfo;
   final bool isOwnProject;
   final String projectId; // Firestore上のプロジェクトドキュメントID
@@ -369,7 +377,8 @@ class TaskPage extends StatelessWidget {
   const TaskPage({
     super.key,
     this.projectTitle = 'タスク',
-    this.ownerInfo = '',
+    this.projectdescription = '説明文',
+    this.ownerInfo = '名前',
     this.isOwnProject = false,
     this.projectId = 'demo-project',
   });
@@ -387,6 +396,7 @@ class TaskPage extends StatelessWidget {
       ),
       body: _TaskPageBody(
         projectTitle: projectTitle,
+        projectdescript: projectdescription,
         ownerInfo: ownerInfo,
         isOwnProject: isOwnProject,
         projectId: projectId,
@@ -401,12 +411,14 @@ class TaskPage extends StatelessWidget {
 // ============================================================
 class _TaskPageBody extends StatefulWidget {
   final String projectTitle;
+  final String projectdescript;
   final String ownerInfo;
   final bool isOwnProject;
   final String projectId;
 
   const _TaskPageBody({
     required this.projectTitle,
+    required this.projectdescript,
     required this.ownerInfo,
     required this.isOwnProject,
     required this.projectId,
@@ -418,6 +430,7 @@ class _TaskPageBody extends StatefulWidget {
 
 class _TaskPageBodyState extends State<_TaskPageBody> {
   Map<String, dynamic>? repo;
+
   Map<String, dynamic>? languages;
   Map<String, dynamic>? currentUser;
   bool _membershipLoaded = false;
@@ -426,7 +439,8 @@ class _TaskPageBodyState extends State<_TaskPageBody> {
   List<_ProjectMember> _projectMembers = [];
   List<dynamic> pullRequests = [];
   List<dynamic> issues = [];
-
+  List<dynamic> latestCommit = [];
+  List<dynamic> activities = [];
   int get openPulls =>
       pullRequests.where((pr) => pr['state'] == 'open').length;
 
@@ -736,6 +750,11 @@ class _TaskPageBodyState extends State<_TaskPageBody> {
 
       final firstRepo = repositories.first as Map<String, dynamic>;
       GitHubSession.selectedRepo = firstRepo;
+      GitHubSession.repositories = repositories
+          .whereType<Map>()
+          .map((repo) => Map<String, dynamic>.from(repo))
+          .toList();
+      await GitHubSession.saveToPrefs();
 
       await _loadRepo(
         owner: (firstRepo['owner'] as Map<String, dynamic>?)?['login']
@@ -782,7 +801,11 @@ class _TaskPageBodyState extends State<_TaskPageBody> {
       repo: repoName,
       token: token,
     );
-
+ latestCommit = await GitHubApi.getCommits(
+  owner: owner,
+  repo: repoName,
+  token: token,
+);
     if (mounted) {
       setState(() {});
     }
@@ -1156,7 +1179,7 @@ class _TaskPageBodyState extends State<_TaskPageBody> {
     );
   }
 
-  Widget _buildMembershipAction() {
+  Widget _buildMembershipAction() {//ここが説明文のところ
     final user = FirebaseAuth.instance.currentUser;
     final canAct = user != null && !widget.isOwnProject;
     final label = _isJoined ? '退出する' : '参加する';
@@ -1173,8 +1196,8 @@ class _TaskPageBodyState extends State<_TaskPageBody> {
           borderRadius: BorderRadius.circular(14),
           border: Border.all(color: _AppColors.cardBorderSoft),
         ),
-        child: const Text(
-          '自分の募集です',
+        child:  Text(
+          widget.projectdescript,//  projectownerInfo
           style: TextStyle(
             color: _AppColors.textSecondary,
             fontSize: 13,
@@ -1261,7 +1284,7 @@ class _TaskPageBodyState extends State<_TaskPageBody> {
         ),
         const SizedBox(width: 13),
         const Text(
-          'ボイスチャット',
+          '関連リンク',
           style: TextStyle(
             color: _AppColors.textPrimary,
             fontSize: 15,
@@ -1277,191 +1300,160 @@ class _TaskPageBodyState extends State<_TaskPageBody> {
   // ============================================================
   Widget _buildRepoCard() {
     return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.03),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: _AppColors.cardBorder),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          _buildRepoHeader(),
-          const SizedBox(height: 10), // Fibonacci spacing
-          _buildRepoStatsRow(),
-          const SizedBox(height: 10),
-          _buildLastCommitRow(),
+  padding: const EdgeInsets.all(16),
+  decoration: BoxDecoration(
+    color: Colors.white.withOpacity(0.03),
+    borderRadius: BorderRadius.circular(14),
+    border: Border.all(color: _AppColors.cardBorder),
+  ),
+  child: Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      // ── 1. ヘッダータイトル ──
+      Row(
+        children: const [
+          Icon(
+            Icons.link_rounded,
+            color: _AppColors.accentPurple, // アクセントカラー
+            size: 18,
+          ),
+          SizedBox(width: 8),
+          Text(
+            '関連リンク',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
         ],
       ),
-    );
-  }
+      const SizedBox(height: 14),
 
-  // ── リポジトリ名 + URL（GitHubアイコン付き） ──
-  Widget _buildRepoHeader() {
-    final repoFullName = repo?['full_name'] as String? ??
-        GitHubSession.selectedRepo?['full_name'] as String?;
-    final userLogin = GitHubSession.currentLogin;
-    final userDisplayName = GitHubSession.displayName;
-
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        const FaIcon(FontAwesomeIcons.github, color: Colors.white, size: 32),
-        const SizedBox(width: 13),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+      // ── 2. リンクアイテム 1: Figma ──
+      InkWell(
+        onTap: () async {
+    final Uri url = Uri.parse('https://figma.com/@project'); // 開きたいURL
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url, mode: LaunchMode.externalApplication); // 外部ブラウザで開く
+    }
+  },
+        borderRadius: BorderRadius.circular(8),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.04),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.white.withOpacity(0.08)),
+          ),
+          child: Row(
             children: [
-              const Text(
-                'GitHubリポジトリ',
-                style: TextStyle(
-                  color: _AppColors.textPrimary,
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
+              const Icon(
+                Icons.palette_outlined,
+                size: 16,
+                color: Colors.white70,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: const [
+                    Text(
+                      'Figma デザイン',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'figma.com/@project',
+                      style: TextStyle(
+                        color: Colors.white38,
+                        fontSize: 11,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 3),
-              Text(
-                repoFullName != null
-                    ? 'github.com/$repoFullName'
-                    : 'GitHubでログインするとリポジトリ情報を取得します',
-                style: const TextStyle(
-                  color: _AppColors.textSecondary,
-                  fontSize: 13,
-                  height: 1.4,
-                ),
+              const Icon(
+                Icons.open_in_new_rounded,
+                size: 14,
+                color: Colors.white38,
               ),
-              if (userLogin != null || userDisplayName != null) ...[
-                const SizedBox(height: 6),
-                Text(
-                  userDisplayName == null || userDisplayName == userLogin
-                      ? '@$userLogin'
-                      : '$userDisplayName (@$userLogin)',
-                  style: const TextStyle(
-                    color: Colors.white54,
-                    fontSize: 12,
-                    height: 1.3,
-                  ),
-                ),
-              ],
             ],
           ),
         ),
-      ],
-    );
-  }
+      ),
 
-  // ── Star / Fork / Issue の統計行 ──
-  Widget _buildRepoStatsRow() {
-    final stars = repo?['stargazers_count']?.toString() ?? '...';
-    final forks = repo?['forks_count']?.toString() ?? '...';
-    final issuesCount = repo?['open_issues_count']?.toString() ?? '...';
+      const SizedBox(height: 8), // リンク間の余白
 
-    return Row(
-      children: [
-        _buildRepoStatItem(
-          icon: Icons.star_rounded,
-          iconColor: const Color(0xFFFACC15),
-          value: stars,
-          label: 'Stars',
-        ),
-        const SizedBox(width: 34), // Fibonacci spacing
-        _buildRepoStatItem(
-          icon: Icons.call_split_rounded,
-          iconColor: _AppColors.accentBlue,
-          value: forks,
-          label: 'Forks',
-        ),
-        const SizedBox(width: 34),
-        _buildRepoStatItem(
-          icon: Icons.error_outline_rounded,
-          iconColor: _AppColors.accentPink,
-          value: issuesCount,
-          label: 'Issues',
-        ),
-      ],
-    );
-  }
-
-  // ── 統計項目単体（アイコン + 数値 + ラベル） ──
-  Widget _buildRepoStatItem({
-    required IconData icon,
-    required Color iconColor,
-    required String value,
-    required String label,
-  }) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, color: iconColor, size: 18),
-        const SizedBox(width: 8),
-        Text(
-          value,
-          style: const TextStyle(
-            color: _AppColors.textPrimary,
-            fontSize: 14,
-            fontWeight: FontWeight.w700,
-          ),
-        ),
-        const SizedBox(width: 5),
-        Text(
-          label,
-          style: const TextStyle(color: _AppColors.textSecondary, fontSize: 13),
-        ),
-      ],
-    );
-  }
-
-  // ── 最新コミット行（ハッシュ + メッセージ + 経過時間） ──
-  Widget _buildLastCommitRow() {
-    final updatedAt = repo?['updated_at'] as String?;
-    final updatedLabel = updatedAt == null
-        ? '...'
-        : updatedAt.replaceFirst('T', ' ').replaceFirst('Z', '');
-    final branchName = repo?['default_branch']?.toString() ?? 'main';
-    final commitMessage = repo == null
-        ? 'GitHubログイン後に最新のリポジトリ情報が表示されます'
-        : '最新の更新を取得しました';
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 13, vertical: 8),
-      decoration: BoxDecoration(
-        color: Colors.black.withOpacity(0.25),
+      // ── 3. リンクアイテム 2: Notion / 仕様書 ──
+      InkWell(
+          onTap: () async {
+    final Uri url = Uri.parse('https://github.com/'); // 開きたいURL
+    if (await canLaunchUrl(url)) {
+      await launchUrl(url, mode: LaunchMode.externalApplication); // 外部ブラウザで開く
+    }
+  },
         borderRadius: BorderRadius.circular(8),
-      ),
-      child: Row(
-        children: [
-          Icon(Icons.commit_rounded, color: _AppColors.textSecondary, size: 16),
-          const SizedBox(width: 13),
-          Text(
-            branchName,
-            style: TextStyle(
-              color: _AppColors.accentPurple,
-              fontSize: 13,
-              fontWeight: FontWeight.w600,
-              fontFamily: 'monospace',
-            ),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.04),
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: Colors.white.withOpacity(0.08)),
           ),
-          const SizedBox(width: 13),
-          Expanded(
-            child: Text(
-              commitMessage,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: _AppColors.textPrimary,
-                fontSize: 13,
+          child: Row(
+            children: [
+              const Icon(
+                Icons.description_outlined,
+                size: 16,
+                color: Colors.white70,
               ),
-            ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: const [
+                    Text(
+                      'Github',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    SizedBox(height: 2),
+                    Text(
+                      'github.com/',
+                      style: TextStyle(
+                        color: Colors.white38,
+                        fontSize: 11,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(
+                Icons.open_in_new_rounded,
+                size: 14,
+                color: Colors.white38,
+              ),
+            ],
           ),
-          const SizedBox(width: 13),
-          Text(
-            updatedLabel,
-            style: const TextStyle(color: _AppColors.textSecondary, fontSize: 12),
-          ),
-        ],
+        ),
       ),
-    );
+    ],
+  ),
+);
   }
+
 
   Color _memberColorFromKey(String key) {
     const palette = [
@@ -1704,53 +1696,46 @@ class _TaskPageBodyState extends State<_TaskPageBody> {
     );
   }
 
-  // ── メンバー招待ボタン（Container + InkWell） ──
-  // ※ 上限（_maxMembers）に達している場合はグレーアウトしてタップ不可にする
-  Widget _buildInviteButton() {
-    final bool isFull = _projectMembers.length >= _maxMembers;
-    final Color themeColor = isFull
-        ? _AppColors.textSecondary
-        : _AppColors.accentPurple;
+// ── メンバー上限通知カード ──
+Widget _buildInviteButton() {
+  final bool isFull = _projectMembers.length >= _maxMembers;
 
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        onTap: isFull ? null : () {}, // TODO: メンバー招待フローに接続
-        borderRadius: BorderRadius.circular(10),
-        child: Container(
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: themeColor.withOpacity(0.4)),
-            color: themeColor.withOpacity(0.08),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                isFull
-                    ? Icons.lock_outline_rounded
-                    : Icons.person_add_alt_1_rounded,
-                color: themeColor,
-                size: 18,
-              ),
-              const SizedBox(width: 13),
-              Text(
-                isFull ? '上限に達しました（$_maxMembers人）' : 'メンバーを招待する',
-                style: TextStyle(
-                  color: themeColor,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w700,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
+  // 上限に達していない場合は何も表示しない（必要に応じて条件を変更してください）
+  if (!isFull) {
+    return const SizedBox.shrink(); 
   }
 
+  const Color themeColor = _AppColors.textSecondary;
+
+  return Container(
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(vertical: 16),
+    decoration: BoxDecoration(
+      borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: themeColor.withOpacity(0.4)),
+      color: themeColor.withOpacity(0.08),
+    ),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        const Icon(
+          Icons.lock_outline_rounded,
+          color: themeColor,
+          size: 18,
+        ),
+        const SizedBox(width: 13),
+        Text(
+          '上限に達しました（$_maxMembers人）',
+          style: const TextStyle(
+            color: themeColor,
+            fontSize: 14,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    ),
+  );
+}
   Widget _buildRightCard() {
     return Container(
       padding: const EdgeInsets.all(21), // Fibonacci spacing
@@ -2059,7 +2044,12 @@ Row(
 
                     const Spacer(),
 
-                    const Text('7', style: TextStyle(color: Colors.white38)),
+                    Text(
+  repo == null ? '...' : '${repo!['branchCount'] ?? 0}',
+  style: const TextStyle(
+    color: Colors.white38,
+  ),
+),
                     const SizedBox(width: 6),
 
                     const Icon(
@@ -2074,19 +2064,20 @@ Row(
           ),
           const SizedBox(height: 14),
           _buildStatusSection(
+            
             'プルリクエスト',
             [
               _StatusStat(
                 count: openPulls.toString(),
                 title: 'レビュー待ち',
                 subtitle: 'Open',
-                accentColor: const Color(0xFF58A6FF),
+                accentColor: _AppColors.accentBlue,
               ),
               _StatusStat(
                 count: mergedPulls.toString(),
                 title: 'マージ済み',
                 subtitle: 'Merged',
-                accentColor: const Color(0xFF22C55E),
+                accentColor: _AppColors.accentGreen,
               ),
               _StatusStat(
                 count: closedPulls.toString(),
@@ -2104,19 +2095,19 @@ Row(
                 count: openIssues.toString(),
                 title: '未対応',
                 subtitle: 'Open',
-                accentColor: const Color(0xFFEC4899),
+                accentColor: _AppColors.accentPink,
               ),
               _StatusStat(
                 count: closedIssues.toString(),
                 title: '解決済み',
                 subtitle: 'Closed',
-                accentColor: const Color(0xFF22C55E),
+                accentColor: _AppColors.accentGreen,
               ),
               _StatusStat(
                 count: '0',
                 title: '下書き',
                 subtitle: 'Draft',
-                accentColor: const Color(0xFF9CA3AF),
+                accentColor: _AppColors.textSecondary,
               ),
             ],
           ),
@@ -2124,240 +2115,200 @@ Row(
           Row(
             children: [
               Expanded(
-                child: Container(
-                  height: 230,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF161B22),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: Colors.white.withOpacity(0.05),
+  child: Container(
+    height: 230,
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: const Color(0xFF161B22),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(
+        color: Colors.white.withOpacity(0.05),
+      ),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          '最新のコミット',
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Expanded(
+          child: latestCommit.isEmpty
+              ? const Center(
+                  child: Text(
+                    '情報がありません',
+                    style: TextStyle(
+                      color: Colors.white54,
+                      fontSize: 14,
                     ),
                   ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          const Text(
-                            '最新のコミット',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                          const SizedBox(height: 12),
-                          InkWell(
-                            onTap: () {},
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                )
+              : ListView.builder(
+                  itemCount:
+                      latestCommit.length > 10 ? 10 : latestCommit.length,
+                  itemBuilder: (context, i) {
+                    final commit = latestCommit[i];
+
+                    final sha =
+                        commit['sha'].toString().substring(0, 7);
+                    final message =
+                        commit['commit']['message'] ?? '';
+                    final date =
+                        commit['commit']['author']['date'] ?? '';
+
+                    return Padding(
+                      padding: const EdgeInsets.only(bottom: 16),
+                      child: InkWell(
+                        onTap: () {},
+                        child: Column(
+                          crossAxisAlignment:
+                              CrossAxisAlignment.start,
+                          children: [
+                            Row(
                               children: [
-                                Row(
-                                  children: [
-                                    const Text(
-                                      'a35b230',
-                                      style: TextStyle(
-                                        color: Color(0xFF8B98A5),
-                                        fontSize: 14,
-                                        fontFamily: 'monospace',
-                                      ),
-                                    ),
-                                    const SizedBox(width: 4),
-                                    const Icon(
-                                      Icons.chevron_right,
-                                      color: Color(0xFF8B98A5),
-                                      size: 18,
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 4),
-                                const Text(
-                                  'test: add unit test coverage',
-                                  style: TextStyle(
-                                    color: Colors.white70,
+                                Text(
+                                  sha,
+                                  style: const TextStyle(
+                                    color: Color(0xFF8B98A5),
                                     fontSize: 14,
+                                    fontFamily: 'monospace',
                                   ),
+                                ),
+                                const SizedBox(width: 4),
+                                const Icon(
+                                  Icons.chevron_right,
+                                  color: Color(0xFF8B98A5),
+                                  size: 18,
                                 ),
                               ],
                             ),
-                          ),
-                          const SizedBox(height: 16),
-                          InkWell(
-                            onTap: () {},
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    const Text(
-                                      'a35b230',
-                                      style: TextStyle(
-                                        color: Color(0xFF8B98A5),
-                                        fontSize: 14,
-                                        fontFamily: 'monospace',
-                                      ),
-                                    ),
-                                    const SizedBox(width: 4),
-                                    const Icon(
-                                      Icons.chevron_right,
-                                      color: Color(0xFF8B98A5),
-                                      size: 18,
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 4),
-                                const Text(
-                                  'test: add unit test coverage',
-                                  style: TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                              ],
+                            const SizedBox(height: 4),
+                            Text(
+                              message,
+                              style: const TextStyle(
+                                color: Colors.white70,
+                                fontSize: 14,
+                              ),
                             ),
-                          ),
-                          const SizedBox(height: 16),
-                          InkWell(
-                            onTap: () {},
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    const Text(
-                                      'a35b230',
-                                      style: TextStyle(
-                                        color: Color(0xFF8B98A5),
-                                        fontSize: 14,
-                                        fontFamily: 'monospace',
-                                      ),
-                                    ),
-                                    const SizedBox(width: 4),
-                                    const Icon(
-                                      Icons.chevron_right,
-                                      color: Color(0xFF8B98A5),
-                                      size: 18,
-                                    ),
-                                  ],
-                                ),
-                                const SizedBox(height: 4),
-                                const Text(
-                                  'test: add unit test coverage',
-                                  style: TextStyle(
-                                    color: Colors.white70,
-                                    fontSize: 14,
-                                  ),
-                                ),
-                              ],
+                            const SizedBox(height: 4),
+                            Text(
+                              date,
+                              style: const TextStyle(
+                                color: Colors.white38,
+                                fontSize: 12,
+                              ),
                             ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Container(
-                  height: 230,
-                  padding: const EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF161B22),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(
-                      color: Colors.white.withOpacity(0.05),
-                    ),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Text(
-                        'アクティビティ',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
+                          ],
                         ),
                       ),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: Colors.blue.withOpacity(0.2),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(Icons.alt_route, color: Colors.blue, size: 18),
-                          ),
-                          const SizedBox(width: 12),
-                          const Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('やまだ が', style: TextStyle(color: Colors.white, fontSize: 14)),
-                                Text('4 commits をプッシュ', style: TextStyle(color: Colors.grey, fontSize: 13)),
-                              ],
-                            ),
-                          ),
-                          const Text('2分前', style: TextStyle(color: Colors.grey, fontSize: 13)),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: Colors.green.withOpacity(0.2),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(Icons.adjust, color: Colors.green, size: 18),
-                          ),
-                          const SizedBox(width: 12),
-                          const Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('ゆいな が', style: TextStyle(color: Colors.white, fontSize: 14)),
-                                Text('Issue #126 を作成', style: TextStyle(color: Colors.blue, fontSize: 13)),
-                              ],
-                            ),
-                          ),
-                          const Text('15分前', style: TextStyle(color: Colors.grey, fontSize: 13)),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(6),
-                            decoration: BoxDecoration(
-                              color: Colors.amber.withOpacity(0.2),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(Icons.call_merge, color: Colors.amber, size: 18),
-                          ),
-                          const SizedBox(width: 12),
-                          const Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('りょうた が', style: TextStyle(color: Colors.white, fontSize: 14)),
-                                Text('PR #152 をマージ', style: TextStyle(color: Colors.blue, fontSize: 13)),
-                              ],
-                            ),
-                          ),
-                          const Text('1時間前', style: TextStyle(color: Colors.grey, fontSize: 13)),
-                        ],
-                      ),
-                    ],
-                  ),
+                    );
+                  },
                 ),
+        ),
+      ],
+    ),
+  ),
+),
+              const SizedBox(width: 16),
+              Expanded(
+  child: Container(
+    height: 230,
+    padding: const EdgeInsets.all(16),
+    decoration: BoxDecoration(
+      color: const Color(0xFF161B22),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(
+        color: Colors.white.withOpacity(0.05),
+      ),
+    ),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          'アクティビティ',
+          style: TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 16),
+        Expanded(
+          child: activities.isEmpty
+          ? const Center(
+            child: Text(
+              'アクティビティはありません',
+              style: TextStyle(color: Colors.grey,fontSize: 14,),
               ),
+            )
+          
+          : ListView.builder(
+            itemCount: activities.length > 10 ? 10 : activities.length,
+            itemBuilder: (context, i) {
+              final activity = activities[i];
+
+              final user = activity['actor']['login'] ?? '';
+              final type = activity['type'] ?? '';
+              final date = activity['created_at'] ?? '';
+
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(6),
+                      decoration: BoxDecoration(
+                        color: Colors.blue.withOpacity(0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.alt_route,
+                        color: Colors.blue,
+                        size: 18,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '$user が',
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 14,
+                            ),
+                          ),
+                          Text(
+                            type,
+                            style: const TextStyle(
+                              color: Colors.blue,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      date,
+                      style: const TextStyle(
+                        color: Colors.grey,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ),
+      ],
+    ),
+  ),
+),
             ],
           ),
           const SizedBox(height: 14),
@@ -2611,6 +2562,15 @@ Row(
         ? _AppColors.accentPurple
         : const Color(0xFF3B4152);
 
+    if (_isGitHubCommitShareMessage(message.text)) {
+      return _buildGitHubCommitShareMessageItem(
+        message: message,
+        isMe: isMe,
+        nameColor: nameColor,
+        avatarColor: avatarColor,
+      );
+    }
+
     return Container(
       padding: const EdgeInsets.only(top: 13, bottom: 13, left: 13, right: 8),
       decoration: BoxDecoration(
@@ -2682,6 +2642,814 @@ Row(
         ],
       ),
     );
+  }
+
+  bool _isGitHubCommitShareMessage(String text) {
+    return text.startsWith('📌 GitHubコミット共有');
+  }
+
+  Map<String, dynamic> _parseGitHubCommitShareMessage(String text) {
+    final lines = text.split('\n');
+    final files = <Map<String, String>>[];
+    bool readingFiles = false;
+
+    String readValue(String line, String prefix) {
+      return line.startsWith(prefix) ? line.substring(prefix.length).trim() : '';
+    }
+
+    for (final rawLine in lines) {
+      final line = rawLine.trim();
+      if (line.isEmpty) {
+        continue;
+      }
+
+      if (line == '変更ファイル一覧:') {
+        readingFiles = true;
+        continue;
+      }
+
+      if (line.startsWith('modified / added / deleted:')) {
+        readingFiles = false;
+        continue;
+      }
+
+      if (line.startsWith('additions:') || line.startsWith('deletions:')) {
+        continue;
+      }
+
+      if (readingFiles && line.startsWith('- ')) {
+        final fileMatch = RegExp(
+          r'^-\s(.+?)\s\[(.+?),\s\+(\d+)\s/\s-(\d+)\]$',
+        ).firstMatch(line);
+        if (fileMatch != null) {
+          files.add({
+            'filename': fileMatch.group(1) ?? '',
+            'status': fileMatch.group(2) ?? '',
+            'additions': fileMatch.group(3) ?? '0',
+            'deletions': fileMatch.group(4) ?? '0',
+          });
+        }
+      }
+    }
+
+    final authorName = lines
+        .map((line) => readValue(line, 'コミットユーザー名: '))
+        .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+    final commitMessage = lines
+        .map((line) => readValue(line, 'コミットメッセージ: '))
+        .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+    final sha = lines
+        .map((line) => readValue(line, 'commit SHA: '))
+        .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+    final time = lines
+        .map((line) => readValue(line, '時間: '))
+        .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+    final branch = lines
+        .map((line) => readValue(line, 'ブランチ: '))
+        .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+    final url = lines
+        .map((line) => readValue(line, 'GitHub URL: '))
+        .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+    final shortSha = lines
+        .map((line) => readValue(line, '短縮SHA: '))
+        .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+    final additions = lines
+        .map((line) => readValue(line, 'additions: '))
+        .firstWhere((value) => value.isNotEmpty, orElse: () => '0');
+    final deletions = lines
+        .map((line) => readValue(line, 'deletions: '))
+        .firstWhere((value) => value.isNotEmpty, orElse: () => '0');
+    final fileSummary = lines
+        .map((line) => readValue(line, 'modified / added / deleted: '))
+        .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+
+    // ── コード差分セクションを解析し、各ファイルに変更前後のコードを紐付ける ──
+    final diffSections = _parseCommitDiffSections(text);
+    if (diffSections.length == files.length) {
+      for (var i = 0; i < files.length; i++) {
+        files[i] = {
+          ...files[i],
+          'before': diffSections[i]['before'] ?? '',
+          'after': diffSections[i]['after'] ?? '',
+        };
+      }
+    }
+
+    return {
+      'authorName': authorName,
+      'commitMessage': commitMessage,
+      'sha': sha,
+      'time': time,
+      'branch': branch,
+      'url': url,
+      'shortSha': shortSha,
+      'additions': additions,
+      'deletions': deletions,
+      'fileSummary': fileSummary,
+      'files': files,
+    };
+  }
+
+  // ── 「コード差分:」以降のテキストから、ファイルごとの変更前／変更後コードを取り出す ──
+  List<Map<String, String>> _parseCommitDiffSections(String text) {
+    const marker = 'コード差分:';
+    final markerIndex = text.indexOf(marker);
+    if (markerIndex == -1) return [];
+
+    final diffText = text.substring(markerIndex + marker.length);
+    final pattern = RegExp(
+      r'ファイル:\s*(.+?)\n変える前のコード:\n```\n([\s\S]*?)\n```\n変えた後のコード:\n```\n([\s\S]*?)\n```',
+    );
+
+    return pattern.allMatches(diffText).map((match) {
+      return {
+        'filename': match.group(1)?.trim() ?? '',
+        'before': match.group(2) ?? '',
+        'after': match.group(3) ?? '',
+      };
+    }).toList();
+  }
+
+  Widget _buildGitHubCommitShareMessageItem({
+    required ChatMessage message,
+    required bool isMe,
+    required Color nameColor,
+    required Color avatarColor,
+  }) {
+    final data = _parseGitHubCommitShareMessage(message.text);
+    final files = (data['files'] as List).cast<Map<String, String>>();
+    final themeAccent = isMe ? _AppColors.accentPurple : _AppColors.accentBlue;
+
+    Color statusColor(String status) {
+      switch (status.toLowerCase()) {
+        case 'added':
+          return _AppColors.accentGreen;
+        case 'deleted':
+        case 'removed':
+          return const Color(0xFFEF4444);
+        case 'renamed':
+          return _AppColors.accentAmber;
+        case 'copied':
+          return const Color(0xFF60A5FA);
+        case 'modified':
+        default:
+          return _AppColors.accentPurple;
+      }
+    }
+
+    Color rowTint(String status) {
+      final base = statusColor(status);
+      return base.withOpacity(0.08);
+    }
+
+    String statusLabel(String status) {
+      switch (status.toLowerCase()) {
+        case 'added':
+          return 'added';
+        case 'deleted':
+        case 'removed':
+          return 'deleted';
+        case 'renamed':
+          return 'renamed';
+        case 'copied':
+          return 'copied';
+        case 'modified':
+        default:
+          return 'modified';
+      }
+    }
+
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 8),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0B1022),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: themeAccent.withOpacity(0.22)),
+        boxShadow: [
+          BoxShadow(
+            color: themeAccent.withOpacity(0.08),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 20,
+            backgroundColor: avatarColor,
+            child: Text(
+              message.senderName.isNotEmpty
+                  ? message.senderName.substring(0, 1)
+                  : '?',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      message.senderName,
+                      style: TextStyle(
+                        color: nameColor,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _formatTime(message.timestamp),
+                      style: TextStyle(
+                        color: Colors.grey.shade500,
+                        fontSize: 12,
+                      ),
+                    ),
+                    const Spacer(),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 4,
+                      ),
+                      decoration: BoxDecoration(
+                        color: themeAccent.withOpacity(0.14),
+                        borderRadius: BorderRadius.circular(999),
+                        border: Border.all(
+                          color: themeAccent.withOpacity(0.28),
+                        ),
+                      ),
+                      child: const Text(
+                        'GitHub Commit',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF10192F),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.white.withOpacity(0.08)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Container(
+                            width: 42,
+                            height: 42,
+                            decoration: BoxDecoration(
+                              borderRadius: BorderRadius.circular(12),
+                              gradient: LinearGradient(
+                                colors: [
+                                  themeAccent.withOpacity(0.24),
+                                  themeAccent.withOpacity(0.12),
+                                ],
+                              ),
+                            ),
+                            child: const Icon(
+                              Icons.code_rounded,
+                              color: Colors.white,
+                              size: 22,
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  data['commitMessage'] as String? ?? '-',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w800,
+                                    height: 1.35,
+                                  ),
+                                ),
+                                const SizedBox(height: 6),
+                                Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    _CommitMetaChip(
+                                      icon: Icons.person_outline,
+                                      label: data['authorName'] as String? ?? '-',
+                                    ),
+                                    _CommitMetaChip(
+                                      icon: Icons.commit_rounded,
+                                      label: data['shortSha'] as String? ?? '-',
+                                      monospace: true,
+                                    ),
+                                    _CommitMetaChip(
+                                      icon: Icons.schedule_rounded,
+                                      label: data['time'] as String? ?? '-',
+                                    ),
+                                    _CommitMetaChip(
+                                      icon: Icons.device_hub_rounded,
+                                      label: data['branch'] as String? ?? '-',
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 14),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.24),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(color: Colors.white.withOpacity(0.08)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                const Text(
+                                  '変更ファイル一覧',
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    letterSpacing: 0.4,
+                                  ),
+                                ),
+                                const Spacer(),
+                                if (files.isNotEmpty)
+                                  Text(
+                                    'タップで差分を表示',
+                                    style: TextStyle(
+                                      color: Colors.white.withOpacity(0.4),
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                            const SizedBox(height: 10),
+                            if (files.isEmpty)
+                              const Text(
+                                'ファイル変更はありません',
+                                style: TextStyle(
+                                  color: Colors.white54,
+                                  fontSize: 12,
+                                ),
+                              )
+                            else
+                              ...files.map(
+                                (file) => Padding(
+                                  padding: const EdgeInsets.only(bottom: 8),
+                                  child: Material(
+                                    color: Colors.transparent,
+                                    child: InkWell(
+                                      borderRadius: BorderRadius.circular(12),
+                                      onTap: () => _showFileDiffDialog(
+                                        file: file,
+                                        accentColor: statusColor(
+                                          file['status'] ?? '',
+                                        ),
+                                        statusLabel: statusLabel(
+                                          file['status'] ?? '',
+                                        ),
+                                      ),
+                                      child: Container(
+                                        padding: const EdgeInsets.all(10),
+                                        decoration: BoxDecoration(
+                                          color: rowTint(file['status'] ?? ''),
+                                          borderRadius: BorderRadius.circular(12),
+                                          border: Border.all(
+                                            color: statusColor(
+                                              file['status'] ?? '',
+                                            ).withOpacity(0.22),
+                                          ),
+                                        ),
+                                        child: Row(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Icon(
+                                              Icons.insert_drive_file_outlined,
+                                              color: statusColor(
+                                                file['status'] ?? '',
+                                              ),
+                                              size: 16,
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Expanded(
+                                              child: Text(
+                                                file['filename'] ?? '-',
+                                                style: TextStyle(
+                                                  color: Colors.white,
+                                                  fontSize: 12,
+                                                  height: 1.3,
+                                                  fontWeight: FontWeight.w600,
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 8),
+                                            Container(
+                                              padding: const EdgeInsets.symmetric(
+                                                horizontal: 8,
+                                                vertical: 3,
+                                              ),
+                                              decoration: BoxDecoration(
+                                                color: statusColor(
+                                                  file['status'] ?? '',
+                                                ).withOpacity(0.16),
+                                                borderRadius:
+                                                    BorderRadius.circular(999),
+                                                border: Border.all(
+                                                  color: statusColor(
+                                                    file['status'] ?? '',
+                                                  ).withOpacity(0.28),
+                                                ),
+                                              ),
+                                              child: Text(
+                                                statusLabel(file['status'] ?? ''),
+                                                style: TextStyle(
+                                                  color: statusColor(
+                                                    file['status'] ?? '',
+                                                  ),
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w800,
+                                                ),
+                                              ),
+                                            ),
+                                            const SizedBox(width: 6),
+                                            Icon(
+                                              Icons.chevron_right_rounded,
+                                              color: Colors.white.withOpacity(0.35),
+                                              size: 18,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          _CommitStatBox(
+                            label: 'additions',
+                            value: data['additions'] as String? ?? '0',
+                            color: _AppColors.accentGreen,
+                          ),
+                          const SizedBox(width: 10),
+                          _CommitStatBox(
+                            label: 'deletions',
+                            value: data['deletions'] as String? ?? '0',
+                            color: const Color(0xFFEF4444),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              data['url'] as String? ?? '',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white54,
+                                fontSize: 11,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── ファイル1件をタップした時に、変更前／変更後の差分をわかりやすく表示するダイアログ ──
+  Future<void> _showFileDiffDialog({
+    required Map<String, String> file,
+    required Color accentColor,
+    required String statusLabel,
+  }) async {
+    final filename = file['filename'] ?? '-';
+    final before = file['before'] ?? '';
+    final after = file['after'] ?? '';
+    final additions = file['additions'] ?? '0';
+    final deletions = file['deletions'] ?? '0';
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return Dialog(
+          backgroundColor: const Color(0xFF0B1022),
+          insetPadding: const EdgeInsets.symmetric(
+            horizontal: 24,
+            vertical: 32,
+          ),
+          child: SizedBox(
+            width: 820,
+            height: 640,
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        Icons.insert_drive_file_outlined,
+                        color: accentColor,
+                        size: 18,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          filename,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            fontFamily: 'monospace',
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 3,
+                        ),
+                        decoration: BoxDecoration(
+                          color: accentColor.withOpacity(0.16),
+                          borderRadius: BorderRadius.circular(999),
+                          border: Border.all(
+                            color: accentColor.withOpacity(0.3),
+                          ),
+                        ),
+                        child: Text(
+                          statusLabel,
+                          style: TextStyle(
+                            color: accentColor,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        onPressed: () => Navigator.of(dialogContext).pop(),
+                        icon: const Icon(Icons.close, color: Colors.white54),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  Row(
+                    children: [
+                      _CommitStatBox(
+                        label: 'additions',
+                        value: additions,
+                        color: _AppColors.accentGreen,
+                      ),
+                      const SizedBox(width: 10),
+                      _CommitStatBox(
+                        label: 'deletions',
+                        value: deletions,
+                        color: const Color(0xFFEF4444),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  Expanded(
+                    child: _buildFileDiffView(before: before, after: after),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // ── 変更前／変更後を行単位で比較し、追加・削除を色分けして表示する ──
+  Widget _buildFileDiffView({required String before, required String after}) {
+    if (before.isEmpty && after.isEmpty) {
+      return const Center(
+        child: Text(
+          'この変更の差分は取得できませんでした',
+          style: TextStyle(color: Colors.white54, fontSize: 13),
+        ),
+      );
+    }
+
+    final beforeLines = before.split('\n');
+    final afterLines = after.split('\n');
+    final tooLarge = beforeLines.length * afterLines.length > 60000;
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: Colors.black.withOpacity(0.28),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: tooLarge
+          ? _buildSideBySideDiffFallback(before: before, after: after)
+          : _buildUnifiedDiff(beforeLines: beforeLines, afterLines: afterLines),
+    );
+  }
+
+  // ── 行数が多すぎる場合は、単純な変更前／変更後の2枠表示にフォールバック ──
+  Widget _buildSideBySideDiffFallback({
+    required String before,
+    required String after,
+  }) {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            '変更前',
+            style: TextStyle(
+              color: Color(0xFFEF4444),
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: const Color(0xFFEF4444).withOpacity(0.08),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              before.isEmpty ? '(なし)' : before,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+                fontFamily: 'monospace',
+                height: 1.5,
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+          const Text(
+            '変更後',
+            style: TextStyle(
+              color: Color(0xFF34D399),
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 6),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: _AppColors.accentGreen.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Text(
+              after.isEmpty ? '(なし)' : after,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 12,
+                fontFamily: 'monospace',
+                height: 1.5,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── 行単位のLCS差分を計算し、追加(緑)・削除(赤)・変更なし(グレー)を並べて表示 ──
+  Widget _buildUnifiedDiff({
+    required List<String> beforeLines,
+    required List<String> afterLines,
+  }) {
+    final diffLines = _computeLineDiff(beforeLines, afterLines);
+
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      itemCount: diffLines.length,
+      itemBuilder: (context, index) {
+        final line = diffLines[index];
+        Color bgColor;
+        Color textColor;
+        String prefix;
+
+        switch (line.type) {
+          case _DiffType.added:
+            bgColor = _AppColors.accentGreen.withOpacity(0.12);
+            textColor = _AppColors.accentGreen;
+            prefix = '+ ';
+            break;
+          case _DiffType.removed:
+            bgColor = const Color(0xFFEF4444).withOpacity(0.12);
+            textColor = const Color(0xFFF87171);
+            prefix = '- ';
+            break;
+          case _DiffType.unchanged:
+            bgColor = Colors.transparent;
+            textColor = Colors.white54;
+            prefix = '  ';
+            break;
+        }
+
+        return Container(
+          width: double.infinity,
+          color: bgColor,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 2),
+          child: Text(
+            '$prefix${line.text}',
+            style: TextStyle(
+              color: textColor,
+              fontSize: 12.5,
+              fontFamily: 'monospace',
+              height: 1.5,
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  // ── 変更前後の行リストから最長共通部分列(LCS)ベースの差分を作る ──
+  List<_DiffLine> _computeLineDiff(
+    List<String> beforeLines,
+    List<String> afterLines,
+  ) {
+    final n = beforeLines.length;
+    final m = afterLines.length;
+    final dp = List.generate(n + 1, (_) => List<int>.filled(m + 1, 0));
+
+    for (int i = n - 1; i >= 0; i--) {
+      for (int j = m - 1; j >= 0; j--) {
+        if (beforeLines[i] == afterLines[j]) {
+          dp[i][j] = dp[i + 1][j + 1] + 1;
+        } else {
+          dp[i][j] = dp[i + 1][j] >= dp[i][j + 1] ? dp[i + 1][j] : dp[i][j + 1];
+        }
+      }
+    }
+
+    final result = <_DiffLine>[];
+    int i = 0, j = 0;
+    while (i < n && j < m) {
+      if (beforeLines[i] == afterLines[j]) {
+        result.add(_DiffLine(text: beforeLines[i], type: _DiffType.unchanged));
+        i++;
+        j++;
+      } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+        result.add(_DiffLine(text: beforeLines[i], type: _DiffType.removed));
+        i++;
+      } else {
+        result.add(_DiffLine(text: afterLines[j], type: _DiffType.added));
+        j++;
+      }
+    }
+    while (i < n) {
+      result.add(_DiffLine(text: beforeLines[i], type: _DiffType.removed));
+      i++;
+    }
+    while (j < m) {
+      result.add(_DiffLine(text: afterLines[j], type: _DiffType.added));
+      j++;
+    }
+    return result;
   }
 
   // ── 時刻を HH:mm 形式に整形 ──
@@ -2879,6 +3647,54 @@ _buildInputIconButton(
     return _formatCommitTime(author?['date'] as String?);
   }
 
+  String _extractBeforeCode(String? patch) {
+    if (patch == null || patch.isEmpty) return '';
+
+    final lines = <String>[];
+    for (final rawLine in patch.split('\n')) {
+      if (rawLine.startsWith('@@') ||
+          rawLine.startsWith('diff ') ||
+          rawLine.startsWith('index ') ||
+          rawLine.startsWith('---') ||
+          rawLine.startsWith('+++')) {
+        continue;
+      }
+      if (rawLine.startsWith('-')) {
+        lines.add(rawLine.substring(1));
+        continue;
+      }
+      if (rawLine.startsWith(' ')) {
+        lines.add(rawLine.substring(1));
+      }
+    }
+
+    return lines.join('\n').trimRight();
+  }
+
+  String _extractAfterCode(String? patch) {
+    if (patch == null || patch.isEmpty) return '';
+
+    final lines = <String>[];
+    for (final rawLine in patch.split('\n')) {
+      if (rawLine.startsWith('@@') ||
+          rawLine.startsWith('diff ') ||
+          rawLine.startsWith('index ') ||
+          rawLine.startsWith('---') ||
+          rawLine.startsWith('+++')) {
+        continue;
+      }
+      if (rawLine.startsWith('+')) {
+        lines.add(rawLine.substring(1));
+        continue;
+      }
+      if (rawLine.startsWith(' ')) {
+        lines.add(rawLine.substring(1));
+      }
+    }
+
+    return lines.join('\n').trimRight();
+  }
+
   String _buildCommitShareText({
     required Map<String, dynamic> repo,
     required Map<String, dynamic> commit,
@@ -2911,6 +3727,25 @@ _buildInputIconButton(
             final fileDeletions = file['deletions']?.toString() ?? '0';
             return '- $filename [$status, +$fileAdditions / -$fileDeletions]';
           }).join('\n');
+    final codeSections = files.isEmpty
+        ? 'なし'
+        : files.map((file) {
+            final filename = file['filename'] as String? ?? '-';
+            final patch = file['patch'] as String?;
+            final beforeCode = _extractBeforeCode(patch);
+            final afterCode = _extractAfterCode(patch);
+            return [
+              'ファイル: $filename',
+              '変える前のコード:',
+              '```',
+              beforeCode.isEmpty ? '(取得できませんでした)' : beforeCode,
+              '```',
+              '変えた後のコード:',
+              '```',
+              afterCode.isEmpty ? '(取得できませんでした)' : afterCode,
+              '```',
+            ].join('\n');
+          }).join('\n\n');
 
     return [
       '📌 GitHubコミット共有',
@@ -2928,6 +3763,9 @@ _buildInputIconButton(
       'modified / added / deleted: ${files.length} files',
       'additions: $additions',
       'deletions: $deletions',
+      '',
+      'コード差分:',
+      codeSections,
     ].join('\n');
   }
 
@@ -3352,5 +4190,101 @@ _buildInputIconButton(
         const SnackBar(content: Text('コミット一覧の取得に失敗しました')),
       );
     }
+  }
+}
+
+// ── 差分1行分のデータ（変更なし／追加／削除のいずれか） ──
+enum _DiffType { unchanged, added, removed }
+
+class _DiffLine {
+  final String text;
+  final _DiffType type;
+
+  const _DiffLine({required this.text, required this.type});
+}
+
+class _CommitMetaChip extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool monospace;
+
+  const _CommitMetaChip({
+    required this.icon,
+    required this.label,
+    this.monospace = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.04),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: Colors.white.withOpacity(0.08)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: Colors.white70),
+          const SizedBox(width: 6),
+          Text(
+            label,
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 11,
+              fontFamily: monospace ? 'monospace' : null,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CommitStatBox extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+
+  const _CommitStatBox({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.28)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: color,
+              fontSize: 10,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 13,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
