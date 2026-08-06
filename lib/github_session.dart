@@ -3,13 +3,15 @@ import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'github_api.dart';
-
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 class GitHubSession {
   static String? accessToken;
   static Map<String, dynamic>? currentUser;
   static Map<String, dynamic>? selectedRepo;
   static List<Map<String, dynamic>> repositories = [];
-
+static String? customDisplayName;
   static const String _accessTokenKey = 'github_access_token';
   static const String _currentUserKey = 'github_current_user';
   static const String _selectedRepoKey = 'github_selected_repo';
@@ -22,20 +24,28 @@ class GitHubSession {
   }
 
   static String? get displayName {
-    final user = currentUser;
-    if (user == null) return null;
-    final name = user['name'] as String?;
-    if (name != null && name.trim().isNotEmpty) {
-      return name;
-    }
-    return user['login'] as String?;
+  if (customDisplayName != null &&
+      customDisplayName!.trim().isNotEmpty) {
+    return customDisplayName;
   }
+
+  final user = currentUser;
+  if (user == null) return null;
+
+  final name = user['name'] as String?;
+  if (name != null && name.trim().isNotEmpty) {
+    return name;
+  }
+
+  return user['login'] as String?;
+}
 
   static void clear() {
     accessToken = null;
     currentUser = null;
     selectedRepo = null;
     repositories = [];
+    customDisplayName = null;
   }
 
   static Future<void> saveToPrefs() async {
@@ -85,7 +95,7 @@ class GitHubSession {
     if (selectedRepo == null && repositories.isNotEmpty) {
       selectedRepo = repositories.first;
     }
-
+await loadCustomDisplayName();
     await saveToPrefs();
   }
 
@@ -149,4 +159,41 @@ class GitHubSession {
       'isOwner': isOwner,
     };
   }
+  static Future<void> saveCustomDisplayName(String? name) async {
+  final trimmed =
+      (name == null || name.trim().isEmpty) ? null : name.trim();
+
+  customDisplayName = trimmed;
+
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
+
+  try {
+    await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .set(
+          {'customDisplayName': trimmed},
+          SetOptions(merge: true),
+        );
+  } catch (e) {
+    debugPrint('カスタム表示名の保存に失敗しました: $e');
+  }
+}
+static Future<void> loadCustomDisplayName() async {
+  final user = FirebaseAuth.instance.currentUser;
+  if (user == null) return;
+
+  try {
+    final doc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(user.uid)
+        .get();
+
+    customDisplayName =
+        doc.data()?['customDisplayName'] as String?;
+  } catch (e) {
+    debugPrint('カスタム表示名の読み込みに失敗しました: $e');
+  }
+}
 }

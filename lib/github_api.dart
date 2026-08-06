@@ -1,7 +1,7 @@
 import 'dart:convert';
-
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-
+import 'github_session.dart';
 class GitHubApi {
   static const String _baseUrl = 'https://api.github.com';
 
@@ -178,5 +178,47 @@ static Future<List<dynamic>> getUserActivities({
     '/users/$username/events',
     token: token,
   );
+}
+static Future<Map<String, dynamic>> createRepository({
+  required String token,
+  required String name,
+  String description = '',
+  bool isPrivate = false,
+}) async {
+  debugPrint('===== CREATE REPOSITORY =====');
+  debugPrint('Token: $token');
+  debugPrint('Repo : $name');
+debugPrint('GitHub Login: ${GitHubSession.currentUser?['login']}');
+debugPrint('GitHub ID: ${GitHubSession.currentUser?['id']}');
+
+
+  final response = await http.post(
+    Uri.parse('$_baseUrl/user/repos'),
+    headers: {
+      'Accept': 'application/vnd.github+json',
+      'Authorization': 'Bearer $token',
+      'Content-Type': 'application/json',
+    },
+    body: jsonEncode({
+      'name': name,
+      'description': description,
+      'private': isPrivate,
+      'auto_init': true,
+    }),
+  );
+debugPrint('Status: ${response.statusCode}');
+debugPrint('Body: ${response.body}');
+  debugPrint('StatusCode: ${response.statusCode}');
+  debugPrint('Body: ${response.body}');
+
+  if (response.statusCode != 201) {
+    throw Exception(
+      'GitHub API Error: ${response.statusCode}\n${response.body}',
+      
+    );
+    
+  }
+
+  return Map<String, dynamic>.from(jsonDecode(response.body));
 }
 }

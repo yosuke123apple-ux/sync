@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
 import 'main.dart';
 
-class SeriousModePage extends StatelessWidget {
-  const SeriousModePage({super.key});
+class FriendModePage extends StatelessWidget {
+  const FriendModePage({super.key});
 
   @override
   Widget build(BuildContext context) {
     return const Scaffold(
+     
       body: ProjectList(
-        roleFilter: '本気モード',
+        roleFilter: 'フレンド機能',
       ),
     );
   }

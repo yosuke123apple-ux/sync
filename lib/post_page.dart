@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'github_session.dart';
-
+import 'github_api.dart';
 class PostPage extends StatefulWidget {
   const PostPage({super.key});
 
@@ -12,13 +12,20 @@ class PostPage extends StatefulWidget {
 
 class _PostPageState extends State<PostPage> {
   final _formKey = GlobalKey<FormState>();
+  bool _showLanguages = false;
+  final _repoNameController = TextEditingController();
+final _repoDescriptionController = TextEditingController();
+bool _showRepoSettings = false;
+bool _repoPrivate = false;
+bool _createRepository = true;
+bool _privateRepo = false;
   //↑複数の入力欄をまとめて操作するリモコン
-  final _titleController = TextEditingController();
-  final _descriptionController = TextEditingController();
-  final _firestore = FirebaseFirestore.instance;
+  final _titleController = TextEditingController();// タイトル入力欄のテキストを管理するコントローラー
+  final _descriptionController = TextEditingController();// 説明入力欄のテキストを管理するコントローラー
+  final _firestore = FirebaseFirestore.instance;// Firebase Firestoreのインスタンスを取得
 
-  String? _selectedRole;
-  String? _selectedLevel;
+  String? _selectedRole;// 選択された役割
+  String? _selectedLevel;// 選択されたレベル
   int? _selectedMemberCount; // ← 変更: int型で人数を保持
   final List<String> _selectedLanguages = [];
   String _submitPhase = 'idle'; // idle, loading, success
@@ -26,7 +33,6 @@ class _PostPageState extends State<PostPage> {
   final List<String> _roles = [
     '本気モード',
     '初心者モード',
-    '学生組',
     '勉強モード',
   ];
 
@@ -56,6 +62,8 @@ class _PostPageState extends State<PostPage> {
 
   @override
   void dispose() {
+    _repoNameController.dispose();
+_repoDescriptionController.dispose();
     _titleController.dispose();
     _descriptionController.dispose();
     super.dispose();
@@ -155,50 +163,98 @@ class _PostPageState extends State<PostPage> {
       setState(() {
         _submitPhase = 'loading';
       });
+ try {
+  final user = FirebaseAuth.instance.currentUser;
+  final ownerId = user?.uid ?? '';
 
-      try {
-        final user = FirebaseAuth.instance.currentUser;
-        final ownerId = user?.uid ?? '';
-        final ownerLogin =
-            GitHubSession.currentLogin ?? user?.email?.split('@').first ?? 'unknown';
-        final ownerInfo = GitHubSession.displayName ?? ownerLogin;
+  final ownerLogin =
+      GitHubSession.currentLogin ??
+      user?.email?.split('@').first ??
+      'unknown';
 
-        await _firestore.collection('projects').add({
-          'title': _titleController.text.trim(),
-          'description': _descriptionController.text.trim(),
-          'memberCount': _selectedMemberCount ?? 1,
-          'currentMembers': 1,
-          'participantIds': ownerId.isEmpty ? <String>[] : <String>[ownerId],
-          'participantProfiles': ownerId.isEmpty
-              ? <Map<String, dynamic>>[]
-              : [
-                  {
-                    'uid': ownerId,
-                    'githubLogin': ownerLogin,
-                    'githubName': ownerInfo,
-                    'avatarUrl': user?.photoURL ?? '',
-                    'isOwner': true,
-                  },
-                ],
-          'role': _selectedRole,
-          'level': _selectedLevel,
-          'languages': _selectedLanguages,
-          'ownerInfo': ownerInfo,
-          'ownerId': ownerId,
-          'createdAt': FieldValue.serverTimestamp(),
-        });
-      } catch (e, stackTrace) {
-        debugPrint('❌ Firebase送信エラー: $e');
-        debugPrint('スタックトレース: $stackTrace');
-        if (!mounted) return;
-        setState(() {
-          _submitPhase = 'idle';
-        });
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('投稿の保存に失敗しました')));
-        return;
-      }
+  final ownerInfo = GitHubSession.displayName ?? ownerLogin;
+
+  final accessToken = GitHubSession.accessToken;
+  if (accessToken == null) {
+    throw Exception('GitHubアクセストークンがありません');
+  }
+debugPrint('AccessToken: $accessToken');
+  final repo = await GitHubApi.createRepository(
+  token: accessToken,
+
+  // 詳細設定が空ならタイトルを使う
+  name: _repoNameController.text.trim().isEmpty
+      ? _titleController.text.trim()
+      : _repoNameController.text.trim(),
+
+  // 詳細設定が空なら募集説明を使う
+  description: _repoDescriptionController.text.trim().isEmpty
+      ? _descriptionController.text.trim()
+      : _repoDescriptionController.text.trim(),
+
+  // Switchの値
+  isPrivate: _repoPrivate,
+);
+
+  await _firestore.collection('projects').add({
+    'repoId': repo['id'],
+    'repoName': repo['name'],
+    'repoOwner': repo['owner']['login'],
+    'repoUrl': repo['html_url'],
+
+
+ 'githubPrivate': _repoPrivate,
+  'githubRepoName': repo['name'],
+  'githubRepoUrl': repo['html_url'],
+
+    'title': _titleController.text.trim(),
+    'description': _descriptionController.text.trim(),
+
+    'memberCount': _selectedMemberCount ?? 1,
+    'currentMembers': 1,
+
+    'participantIds': ownerId.isEmpty ? <String>[] : <String>[ownerId],
+
+    'participantProfiles': ownerId.isEmpty
+        ? <Map<String, dynamic>>[]
+        : [
+            {
+              'uid': ownerId,
+              'githubLogin': ownerLogin,
+              'githubName': ownerInfo,
+              'avatarUrl': user?.photoURL ?? '',
+              'isOwner': true,
+            },
+          ],
+
+    'role': _selectedRole,
+    'level': _selectedLevel,
+    'languages': _selectedLanguages,
+
+    'ownerInfo': ownerInfo,
+    'ownerId': ownerId,
+
+    'createdAt': FieldValue.serverTimestamp(),
+  });
+}
+catch (e, stackTrace) {
+  debugPrint('❌ Firebase送信エラー: $e');
+  debugPrintStack(stackTrace: stackTrace);
+
+  if (!mounted) return;
+
+  setState(() {
+    _submitPhase = 'idle';
+  });
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text('投稿に失敗しました\n$e'),
+    ),
+  );
+
+  return;
+} 
 
       if (!mounted) return;
       setState(() {
@@ -282,7 +338,7 @@ class _PostPageState extends State<PostPage> {
           const SizedBox(height: 10),
           _buildSideStat(
             'Mode',
-            'ドロップダウン',
+            '3',
             '人数は3人まで選択可',
             const Color(0xFF22D3EE),
           ),
@@ -600,57 +656,194 @@ class _PostPageState extends State<PostPage> {
                         accent: const Color(0xFF60A5FA),
                       ),
                       const SizedBox(height: 10),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: const Color(0xFF0C1324),
-                          borderRadius: BorderRadius.circular(16),
-                          border: Border.all(color: const Color(0xFF25314B)),
-                        ),
-                        child: Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: _languages.map((language) {
-                            final isSelected = _selectedLanguages.contains(
-                              language,
-                            );
-                            return FilterChip(
-                              selected: isSelected,
-                              label: Text(language),
-                              labelStyle: TextStyle(
-                                color: isSelected
-                                    ? Colors.white
-                                    : const Color(0xFFCED5E8),
-                                fontWeight: FontWeight.w600,
-                              ),
-                              backgroundColor: const Color(0xFF111A30),
-                              selectedColor: const Color(0xFF7C5CFF),
-                              checkmarkColor: Colors.white,
-                              side: BorderSide(
-                                color: isSelected
-                                    ? const Color(0xFF7C5CFF)
-                                    : const Color(0xFF25314B),
-                              ),
-                              onSelected: (selected) {
-                                setState(() {
-                                  if (selected) {
-                                    _selectedLanguages.add(language);
-                                  } else {
-                                    _selectedLanguages.remove(language);
-                                  }
-                                });
-                              },
-                            );
-                          }).toList(),
-                        ),
-                      ),
+                    Container(
+  width: double.infinity,
+  decoration: BoxDecoration(
+    color: const Color(0xFF0C1324),
+    borderRadius: BorderRadius.circular(16),
+    border: Border.all(
+      color: const Color(0xFF25314B),
+    ),
+  ),
+  child: Column(
+    children: [
+      InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: () {
+          setState(() {
+            _showLanguages = !_showLanguages;
+          });
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: 16,
+            vertical: 14,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  _selectedLanguages.isEmpty
+                      ? '使用言語を選択'
+                      : _selectedLanguages.length <= 3
+                          ? _selectedLanguages.join(', ')
+                          : '${_selectedLanguages.take(3).join(', ')} ほか${_selectedLanguages.length - 3}件',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 12),
+              AnimatedRotation(
+                turns: _showLanguages ? 0.5 : 0,
+                duration: const Duration(milliseconds: 200),
+                child: const Icon(
+                  Icons.keyboard_arrow_down,
+                  color: Colors.white70,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+
+      AnimatedCrossFade(
+        duration: const Duration(milliseconds: 200),
+        crossFadeState: _showLanguages
+            ? CrossFadeState.showSecond
+            : CrossFadeState.showFirst,
+        firstChild: const SizedBox.shrink(),
+        secondChild: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 0, 14, 14),
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _languages.map((language) {
+              final isSelected = _selectedLanguages.contains(language);
+
+              return FilterChip(
+                selected: isSelected,
+                label: Text(language),
+                labelStyle: TextStyle(
+                  color: isSelected
+                      ? Colors.white
+                      : const Color(0xFFCED5E8),
+                  fontWeight: FontWeight.w600,
+                ),
+                backgroundColor: const Color(0xFF111A30),
+                selectedColor: const Color(0xFF7C5CFF),
+                checkmarkColor: Colors.white,
+                side: BorderSide(
+                  color: isSelected
+                      ? const Color(0xFF7C5CFF)
+                      : const Color(0xFF25314B),
+                ),
+                onSelected: (selected) {
+                  setState(() {
+                    if (selected) {
+                      _selectedLanguages.add(language);
+                    } else {
+                      _selectedLanguages.remove(language);
+                    }
+                  });
+                },
+              );
+            }).toList(),
+          ),
+        ),
+      ),
+    ],
+  ),
+)
                     ],
                   ),
                 ),
+              
               ],
             ),
             const SizedBox(height: 18),
+          Expanded(
+  child: Column(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+    
+
+      const SizedBox(height: 20),
+
+      _sectionTitle(
+        'GitHubリポジトリ',
+        '作成するリポジトリの設定を変更できます。 ※クリックして展開',
+        step: '06',
+        accent: const Color(0xFF7C5CFF),
+      ),
+      const SizedBox(height: 10),
+
+      Container(
+  decoration: BoxDecoration(
+    color: const Color(0xFF0C1324),
+    borderRadius: BorderRadius.circular(16),
+    border: Border.all(
+      color: const Color(0xFF25314B),
+    ),
+  ),
+  child: Theme(
+    data: Theme.of(context).copyWith(
+      dividerColor: Colors.transparent,
+    ),
+    child: ExpansionTile(
+      tilePadding: const EdgeInsets.symmetric(
+        horizontal: 16,
+        vertical: 4,
+      ),
+      childrenPadding: const EdgeInsets.fromLTRB(
+        16,
+        0,
+        16,
+        16,
+      ),
+      collapsedIconColor: Colors.white,
+      iconColor: Colors.white,
+      title: const Text(
+        '詳細設定',
+        style: TextStyle(
+          color: Colors.white,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      
+      children: [
+        TextFormField(
+          controller: _repoNameController,
+          style: const TextStyle(color: Colors.white),
+          decoration: _inputDecoration('リポジトリ名'),
+        ),
+        const SizedBox(height: 12),
+        TextFormField(
+          controller: _repoDescriptionController,
+          style: const TextStyle(color: Colors.white),
+          decoration: _inputDecoration('説明'),
+        ),
+        const SizedBox(height: 12),
+        SwitchListTile(
+  title: const Text('非公開リポジトリ'),
+  subtitle: const Text('オンにすると招待したメンバーのみ閲覧できます'),
+  value: _repoPrivate,
+  onChanged: (value) {
+    setState(() {
+      _repoPrivate = value;
+    });
+  },
+)
+      ],
+    ),
+  ),
+)
+    ],
+  ),
+),
+const SizedBox(height: 18),
             SizedBox(
               width: double.infinity,
               height: 50,

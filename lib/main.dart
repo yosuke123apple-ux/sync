@@ -14,8 +14,11 @@ import 'dart:async'; // ★これを追加します！
 import 'github_api.dart';
 import 'dart:ui';
 import 'SeriousModePage.dart';
-
-
+import 'BeginnerModePage.dart';
+import 'StudyModePage.dart';
+import 'AppleModePage.dart';
+import 'FriendModePage.dart';
+import 'setting.dart';
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
@@ -39,13 +42,19 @@ class _LoginPageState extends State<LoginPage> {
       UserCredential userCredential;
 
       if (kIsWeb) {//KIsWeb=スマホかウェブ
-        userCredential = await FirebaseAuth.instance.signInWithPopup(
-          GithubAuthProvider(),
-        );
+        final provider = GithubAuthProvider()
+  ..addScope('repo');
+
+userCredential = await FirebaseAuth.instance.signInWithPopup(
+  provider,
+);
       } else {
-        userCredential = await FirebaseAuth.instance.signInWithProvider(
-          GithubAuthProvider(),//githubで認証するという物
-        );
+       final provider = GithubAuthProvider()
+  ..addScope('repo');
+
+userCredential = await FirebaseAuth.instance.signInWithProvider(
+  provider,
+);
       }
 
       final githubCredential =//credential=googleの情報をgithubの認証情報とする
@@ -79,6 +88,8 @@ class _LoginPageState extends State<LoginPage> {
             GitHubSession.selectedRepo = null;
           }
           await GitHubSession.saveToPrefs();
+          // Firestoreに保存済みのカスタム表示名があれば読み込む
+          await GitHubSession.loadCustomDisplayName();
           debugPrint('GitHub current user: ${GitHubSession.currentLogin}');
           debugPrint(
             'GitHub selected repo: ${GitHubSession.selectedRepo?['full_name']}',
@@ -150,12 +161,13 @@ class _LoginPageState extends State<LoginPage> {
 
 
     return Scaffold(
+        resizeToAvoidBottomInset: true,
       backgroundColor: const Color(0xFF060A18),
       body: Center(
           child: SingleChildScrollView(
         child: Container(
           width: 500, // お好みの幅に調整してください
-          height: 500,
+          
     // 内側の余白（枠線とテキスト・アイコンの間の隙間）
     padding: const EdgeInsets.symmetric(vertical: 32.0, horizontal: 24.0),
     
@@ -478,9 +490,15 @@ SizedBox(height: 50),
 // ============================================================
 
 Future<void> main() async {// Flutterの初期化とFirebaseの初期化を行う
-  WidgetsFlutterBinding.ensureInitialized();
+  WidgetsFlutterBinding.ensureInitialized();// Flutterの初期化を行う
   await _initializeFirebase();
   await GitHubSession.restoreFromPrefs();
+
+  // ログイン済みならFirestoreに保存済みのカスタム表示名を先読みしておく
+  if (FirebaseAuth.instance.currentUser != null) {
+    await GitHubSession.loadCustomDisplayName();
+  }
+
   runApp(const SyncApp());
 }
 
@@ -488,7 +506,7 @@ Future<void> main() async {// Flutterの初期化とFirebaseの初期化を行�
 Future<void> _initializeFirebase() async {
   try {
     await Firebase.initializeApp(// Firebaseの初期化
-      options: DefaultFirebaseOptions.currentPlatform,
+      options: DefaultFirebaseOptions.currentPlatform,// Firebaseの初期化オプションを指定
     );
     
     // ✅ ログイン状態をアプリ再起動後も保持するように設定
@@ -778,50 +796,44 @@ const List<MenuItemInfo> _menuItems = [
     iconColor: Colors.white,
     index: 0,
   ),
+   MenuItemInfo(
+    label: '参加中',
+    description: '現在参加しているもの、募集しているもの',
+    icon: Icons.handshake_outlined,
+    iconColor: Color(0xFF8B5CF6),
+    index: 1,
+  ),
   MenuItemInfo(
     label: '本気モード',
     description: '本気でやり成果を残す！',
     icon: Icons.local_fire_department_outlined,
     iconColor: Color(0xffEF4444),
-    index: 1,
+    index: 2,
   ),
   MenuItemInfo(
     label: '初心者モード',
     description: '簡単なことから始めよう',
     icon: Icons.rocket_launch_outlined,
     iconColor: Color(0xffF59E0B),
-    index: 2,
-  ),
-  MenuItemInfo(
-    label: '学生組',
-    description: 'みんなで協力',
-    icon: Icons.people_outline,
-    iconColor: Color(0xff10B981),
     index: 3,
   ),
+
   MenuItemInfo(
-    label: 'フレンド機能',
-    description: 'つながりを作ろう',
+        label: '勉強モード',
+    description: 'みんなと一緒にがんばろう',
     icon: Icons.person_add_outlined,
     iconColor: Color(0xff3B82F6),
     index: 4,
   ),
   MenuItemInfo(
-    label: '勉強モード',
-    description: 'みんなと一緒にがんばろう',
-    icon: Icons.music_note_outlined,
-    iconColor: Color(0xffEC4899),
+label: 'フレンド機能',
+    description: 'つながりを作ろう',
+    icon: Icons.groups_outlined,
+    iconColor: Color(0xFF22C55E),
     index: 5,
   ),
+    
 ];
-
-/// Firestoreが空・エラー時に表示するフォールバック用モックデータ
-///
-/// 元コードは同じ内容の ProjectInfo を6個ベタ書きしていたため、
-/// List.generate で「同じ内容を6件表示する」という意図を1箇所にまとめた。
-
-
-
 
 // ============================================================
 // サービス層（Firestore通信）
@@ -1369,33 +1381,6 @@ Row(
     );
   }
 
-  Widget _buildTags() {
-    return Wrap(
-      spacing: 8,
-      runSpacing: 8,
-      children: project.tags
-          .map(
-            (tag) => Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: Colors.black26,
-                borderRadius: BorderRadius.circular(999),
-                border: Border.all(color: Colors.white10),
-              ),
-              child: Text(
-                tag,
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ),
-          )
-          .toList(),
-    );
-  }
-
   Widget _buildMemberCount() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -1440,14 +1425,15 @@ Row(
     );
   }
 }
-
-/// 募集一覧（Firestoreから取得。エラー/未取得時はモックデータにフォールバック）
+/// 募集一覧（Firestoreから取得）
 class ProjectList extends StatelessWidget {
-    final String? roleFilter;
+  final String? roleFilter;
+  final bool showOnlyJoined;
 
   const ProjectList({
-      super.key,
+    super.key,
     this.roleFilter,
+    this.showOnlyJoined = false,
   });
 
   @override
@@ -1457,25 +1443,35 @@ class ProjectList extends StatelessWidget {
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           debugPrint('❌ Firestore読み込みエラー: ${snapshot.error}');
-        
         }
+
         var projects = snapshot.data ?? [];
 
-if (roleFilter != null) {
-  projects = projects
-      .where((project) => project.role == roleFilter)
-      .toList();
-}
-        if (projects == null) {
-          return const Center(
-            child: CircularProgressIndicator(),
-          );
+        final user = FirebaseAuth.instance.currentUser;
+
+        // 自分が募集したもの、または参加しているものだけ表示
+        if (showOnlyJoined && user != null) {
+          projects = projects.where((project) {
+            final isOwner = project.ownerId == user.uid;
+            final isJoined = project.participantIds.contains(user.uid);
+
+            return isOwner || isJoined;
+          }).toList();
+        }
+
+        // モードで絞り込み
+        if (roleFilter != null) {
+          projects = projects
+              .where((project) => project.role == roleFilter)
+              .toList();
         }
 
         if (projects.isEmpty) {
           return Center(
             child: Text(
-              'まだ募集がありません。右上の「投稿」から作ってみよう。',
+              showOnlyJoined
+                  ? '参加中・募集中のプロジェクトはありません。'
+                  : 'まだ募集がありません。右上の「投稿」から作ってみよう。',
               style: TextStyle(
                 color: Colors.white.withValues(alpha: 0.65),
                 fontSize: 14,
@@ -1495,6 +1491,7 @@ if (roleFilter != null) {
       itemBuilder: (context, index) {
         final project = projects[index];
         final accent = AppColors.accentForRole(project.role);
+
         return _ProjectCard(
           project: project,
           accent: accent,
@@ -1646,7 +1643,7 @@ class _HomeSidebarLeft extends StatelessWidget {
               ),
             ),
             _buildProfileCard(context),
-            _buildSettingsRow(),
+            _buildSettingsRow(context),
           ],
         ),
       ),
@@ -1696,115 +1693,166 @@ class _HomeSidebarLeft extends StatelessWidget {
       ),
     );
   }
+Widget _buildProfileCard(BuildContext context) {
+  // 設定画面で保存したカスタム表示名を最優先で表示する
+  final displayName =
+      GitHubSession.customDisplayName ??
+      GitHubSession.displayName ??
+      GitHubSession.currentLogin ??
+      'ユーザー';
 
-  Widget _buildProfileCard(BuildContext context) {
-    return Container(
-      width: 220,
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0A1020),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFF1D2742)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  gradient: LinearGradient(
-                    colors: [
-                      const Color(0xff7c4dff).withValues(alpha: 0.25),
-                      const Color(0xff5c6bc0).withValues(alpha: 0.15),
+  return StreamBuilder<List<ProjectInfo>>(
+    stream: ProjectService.watchProjects(),
+    builder: (context, snapshot) {
+      final projects = snapshot.data ?? [];
+      final user = FirebaseAuth.instance.currentUser;
+
+      final joinedCount = user == null
+          ? 0
+          : projects
+              .where((project) => project.participantIds.contains(user.uid))
+              .length;
+
+      final ownerCount = user == null
+          ? 0
+          : projects
+              .where((project) => project.ownerId == user.uid)
+              .length;
+
+      const friendCount = 0;
+
+      return Container(
+        width: 220,
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0A1020),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: const Color(0xFF1D2742)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Container(
+                  width: 56,
+                  height: 56,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: LinearGradient(
+                      colors: [
+                        const Color(0xff7c4dff).withValues(alpha: 0.25),
+                        const Color(0xff5c6bc0).withValues(alpha: 0.15),
+                      ],
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xff7c4dff).withValues(alpha: 0.25),
+                        blurRadius: 20,
+                        spreadRadius: 2,
+                      ),
                     ],
                   ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: const Color(0xff7c4dff).withValues(alpha: 0.25),
-                      blurRadius: 20,
-                      spreadRadius: 2,
-                    ),
-                  ],
+                  child: const Icon(
+                    Icons.person,
+                    color: Color(0xff987FFF),
+                    size: 28,
+                  ),
                 ),
-                child: const Icon(
-                  Icons.person,
-                  color: Color(0xff987FFF),
-                  size: 28,
-                ),
-              ),
-              const SizedBox(width: 12),
-              const Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'やまた_Dev',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.w700,
-                        fontSize: 15,
-                        letterSpacing: 0.3,
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        displayName,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 15,
+                        ),
                       ),
-                    ),
-                    SizedBox(height: 2),
-                    Text(
-                      '@yama_dev',
-                      style: TextStyle(color: Color(0xff7B849D), fontSize: 12),
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(30),
-              gradient: const LinearGradient(
-                colors: [Color(0xff7c4dff), Color(0xff5c6bc0)],
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.25),
-                  blurRadius: 20,
-                  offset: const Offset(0, 10),
-                ),
-              ],
-            ),
-            child: const Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(Icons.auto_awesome, color: Colors.white, size: 14),
-                SizedBox(width: 6),
-                Text(
-                  'はじめの一歩',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 12,
+                      const SizedBox(height: 2),
+                      Text(
+                        '@${GitHubSession.currentLogin ?? ''}',
+                        style: const TextStyle(
+                          color: Color(0xff7B849D),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
-          ),
-          const SizedBox(height: 12),
-          const Divider(color: Colors.white12, height: 1),
-          const SizedBox(height: 12),
-          const SizedBox.shrink(),
-        ],
+            const SizedBox(height: 16),
+            const Divider(color: Colors.white12),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildStatItem(
+                  value: joinedCount.toString(),
+                  label: '参加中',
+                ),
+                _buildStatItem(
+                  value: ownerCount.toString(),
+                  label: '募集',
+                ),
+                _buildStatItem(
+                  value: friendCount.toString(),
+                  label: 'Friend',
+                ),
+              ],
+            ),
+          ],
+        ),
+      );
+    },
+  );
+}
+Widget _buildStatItem({
+  required String value,
+  required String label,
+}) {
+  return Column(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Text(
+        value,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 22,
+          fontWeight: FontWeight.bold,
+        ),
       ),
-    );
-  }
-
-  Widget _buildSettingsRow() {
+      const SizedBox(height: 4),
+      Text(
+        label,
+        style: const TextStyle(
+          color: Color(0xff7B849D),
+          fontSize: 12,
+        ),
+      ),
+    ],
+  );
+}
+  Widget _buildSettingsRow(BuildContext context) {
     return GestureDetector(
-      onTap: () => debugPrint('設定をタップしました'),
+      onTap: () async {
+  // 設定画面から戻ってきたら、カスタム表示名が変わっている可能性があるので
+  // ホーム画面側でも再読み込みしてサイドバーへ反映する
+  await Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => const SettingPage(),
+    ),
+  );
+
+  final homeState = context.findAncestorStateOfType<_HomePageState>();
+  await homeState?._loadCustomDisplayName();
+},
       child: Container(
         width: 220,
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
@@ -2396,6 +2444,8 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     // 起動時にも記録を試みる
     _recordTodayIfNeeded();
+    // Firestoreに保存されたカスタム表示名を読み込み、サイドバーに反映する
+    _loadCustomDisplayName();
   }
 
   @override
@@ -2418,14 +2468,36 @@ class _HomePageState extends State<HomePage> with WidgetsBindingObserver {
     return;
   }
 
+  // 設定画面で保存されたカスタム表示名をFirestoreから読み込み、再描画する
+  Future<void> _loadCustomDisplayName() async {
+    await GitHubSession.loadCustomDisplayName();
+    if (!mounted) return;
+    setState(() {});
+  }
+
 
 Widget _buildBody() {
   switch (_selectedMenuIndex) {
     case 0:
       return const ProjectList();
 
-    case 1:
+case 1:
+return const AppleModePage();
+
+    case 2:
       return const SeriousModePage();
+
+
+    case 3:
+    return const BeginnerModePage();
+
+    case 4:
+    return const StudyModePage();
+    
+    case 5:
+    return const FriendModePage();
+
+
 
     default:
       return const ProjectList();
